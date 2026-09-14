@@ -113,8 +113,10 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
     return {"success": True, "repoCount": repo_count, "issueCount": issue_count}
 
 
-def simplify_collections(settings: Settings | None = None) -> dict:
+def simplify_collections(settings: Settings | None = None, confirm: bool = False) -> dict:
     """Normalize existing data to strict simplified `repos` and `issues` collections."""
+    if not confirm:
+        raise RuntimeError("simplify_collections is destructive; pass confirm=True to continue")
     settings = settings or load_settings()
     db = get_database(settings)
     collection_names = set(db.list_collection_names())
@@ -143,9 +145,10 @@ def simplify_collections(settings: Settings | None = None) -> dict:
         db.repos.delete_many({})
         db.repos.insert_many(list(normalized_repos.values()))
 
-    source_issues = list(db.issues.find({}))
+    source_issues = []
     if "items" in collection_names and db.items.count_documents({}) > 0:
         source_issues.extend(list(db.items.find({})))
+    source_issues.extend(list(db.issues.find({})))
 
     normalized_issues: dict[str, dict] = {}
     for issue in source_issues:

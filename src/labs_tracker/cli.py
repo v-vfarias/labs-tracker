@@ -43,9 +43,11 @@ def sync(recently_closed_days: int = typer.Option(30, help="Closed items updated
 
 
 @app.command()
-def simplify():
+def simplify(yes: bool = typer.Option(False, "--yes", help="Confirm destructive normalization/drop of legacy collections.")):
     """Normalize existing data to strict simplified repos/issues schema."""
-    result = simplify_collections()
+    if not yes:
+        raise typer.BadParameter("This command is destructive. Re-run with --yes to confirm.")
+    result = simplify_collections(confirm=True)
     console.print(f"Simplified collections: {result['repos']} repo(s), {result['issues']} issue/pr record(s).")
 
 

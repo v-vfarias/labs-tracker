@@ -77,7 +77,7 @@ pip install -e .
 
 ```bash
 python -m labs_tracker.cli sync
-python -m labs_tracker.cli simplify
+python -m labs_tracker.cli simplify --yes
 python -m labs_tracker.cli tasks
 python -m labs_tracker.cli classify
 python -m labs_tracker.cli export
@@ -123,7 +123,7 @@ Manual fields are preserved across syncs via `$setOnInsert` defaults and user ed
 If you previously synced with the old complex schema, run:
 
 ```bash
-python -m labs_tracker.cli simplify
+python -m labs_tracker.cli simplify --yes
 ```
 
 This normalizes old data into strict `repos` and `issues` shapes and removes legacy collections (`items`, `syncRuns`).

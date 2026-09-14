@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from .models import KIND_ISSUE, KIND_PR, STATE_OPEN
+from .models import KIND_ISSUE, KIND_PR, STATE_CLOSED, STATE_OPEN
 
 
 def _as_aware(value):
@@ -71,7 +71,7 @@ def generate_tasks(db) -> list[dict]:
         if state == STATE_OPEN and kind == KIND_PR and last_tested is None:
             tasks.append(_issue_task(30, "Open PR missing lastTested: validate PR for maintainers", issue))
 
-        if state != STATE_OPEN and last_tested is None:
+        if state == STATE_CLOSED and last_tested is None:
             tasks.append(_issue_task(40, "Closed item missing lastTested: record validation", issue))
 
     for repo in db.repos.find({}):

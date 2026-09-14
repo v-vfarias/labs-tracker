@@ -141,7 +141,7 @@ class ModelTaskTests(unittest.TestCase):
         )
 
         with patch("labs_tracker.sync.get_database", return_value=db), patch("labs_tracker.sync.ensure_indexes"):
-            result = simplify_collections(settings=object())
+            result = simplify_collections(settings=object(), confirm=True)
 
         self.assertEqual(result["repos"], 1)
         self.assertEqual(result["issues"], 1)
@@ -157,6 +157,10 @@ class ModelTaskTests(unittest.TestCase):
             sorted(issue.keys()),
             sorted(["_id", "issueId", "repoId", "kind", "title", "state", "typeOfIssue", "resolution", "status", "lastTested"]),
         )
+
+    def test_simplify_requires_confirm_flag(self):
+        with self.assertRaises(RuntimeError):
+            simplify_collections(settings=object(), confirm=False)
 
 
 if __name__ == "__main__":

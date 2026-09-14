@@ -264,6 +264,9 @@ def _build_ui():
                     if not issue_id or not repo_id or not title:
                         ui.notify("issueId, repoId, and title are required", color="negative")
                         return
+                    if db.issues.find_one({"issueId": issue_id}):
+                        ui.notify("issue/pr already exists", color="warning")
+                        return
                     db.issues.update_one(
                         {"_id": issue_id},
                         {
@@ -383,7 +386,7 @@ def _build_ui():
                 refresh_tasks()
 
             async def run_simplify():
-                result = await nicegui_run.io_bound(simplify_collections)
+                result = await nicegui_run.io_bound(simplify_collections, None, True)
                 ui.notify(f"Simplified to {result['repos']} repos and {result['issues']} issue/pr records", color="positive")
                 refresh_repos()
                 refresh_issues()
@@ -395,9 +398,11 @@ def _build_ui():
                 ui.button("Export markdown + CSV", on_click=export_reports)
 
 
-
 def run(host: str = "127.0.0.1", port: int = 8080):
-    _build_ui()
+    @ui.page("/")
+    def _home():
+        _build_ui()
+
     ui.run(host=host, port=port, title="Labs Tracker", reload=False)
 
 
