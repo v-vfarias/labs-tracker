@@ -35,7 +35,7 @@ Two primary collections are used:
   "title": "String",
   "state": "Open | Closed",
   "typeOfIssue": "UI drift | Outdated version | Nice to have | Skillable capacity | Product consistency | Unknown",
-  "resolution": "Updated UI or code or versions | Commented or added the requested add | Report to Skillable | Added note or warning | Not applicable | Unknown",
+  "resolution": "Updated UI or code or versions | Commented or added the requested content | Report to Skillable | Added note or warning | Not applicable | Unknown",
   "status": "Closed | In review | Not applicable | Open",
   "lastTested": null
 }

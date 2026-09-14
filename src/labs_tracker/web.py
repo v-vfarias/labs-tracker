@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nicegui import run, ui
+from nicegui import run as nicegui_run, ui
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
@@ -98,10 +98,15 @@ def _build_ui():
                 repo_table.update()
 
             def save_repo(existing_id: str | None, repo_id: str, name: str, involved_devs: str, products: str, last_tested: str):
+                try:
+                    parsed_last_tested = _parse_dt(last_tested)
+                except ValueError:
+                    ui.notify("Invalid lastTested format. Use ISO datetime.", color="negative")
+                    return
                 payload = {
                     "involvedDevs": _parse_csv(involved_devs),
                     "products": _parse_csv(products),
-                    "lastTested": _parse_dt(last_tested),
+                    "lastTested": parsed_last_tested,
                 }
                 if existing_id:
                     db.repos.update_one({"id": existing_id}, {"$set": payload})
@@ -242,11 +247,16 @@ def _build_ui():
                 issues_table.update()
 
             def save_issue(existing_id: str | None, issue_id: str, repo_id: str, kind: str, title: str, state: str, type_of_issue: str, resolution: str, status: str, last_tested: str):
+                try:
+                    parsed_last_tested = _parse_dt(last_tested)
+                except ValueError:
+                    ui.notify("Invalid lastTested format. Use ISO datetime.", color="negative")
+                    return
                 manual = {
                     "typeOfIssue": type_of_issue,
                     "resolution": resolution,
                     "status": status,
-                    "lastTested": _parse_dt(last_tested),
+                    "lastTested": parsed_last_tested,
                 }
                 if existing_id:
                     db.issues.update_one({"issueId": existing_id}, {"$set": manual})
@@ -362,18 +372,18 @@ def _build_ui():
             ui.label("Generate local markdown and CSV exports from simplified model.")
 
             async def export_reports():
-                path = await run.io_bound(generate_report, db, Path("reports"))
+                path = await nicegui_run.io_bound(generate_report, db, Path("reports"))
                 ui.notify(f"Exported report to {path}", color="positive")
 
             async def run_sync():
-                result = await run.io_bound(sync, None, 30)
+                result = await nicegui_run.io_bound(sync)
                 ui.notify(f"Synced {result['repoCount']} repo(s), {result['issueCount']} issue/pr records", color="positive")
                 refresh_repos()
                 refresh_issues()
                 refresh_tasks()
 
             async def run_simplify():
-                result = await run.io_bound(simplify_collections)
+                result = await nicegui_run.io_bound(simplify_collections)
                 ui.notify(f"Simplified to {result['repos']} repos and {result['issues']} issue/pr records", color="positive")
                 refresh_repos()
                 refresh_issues()

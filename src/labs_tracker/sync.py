@@ -117,6 +117,7 @@ def simplify_collections(settings: Settings | None = None) -> dict:
     """Normalize existing data to strict simplified `repos` and `issues` collections."""
     settings = settings or load_settings()
     db = get_database(settings)
+    collection_names = set(db.list_collection_names())
 
     normalized_repos: dict[str, dict] = {}
     for repo in list(db.repos.find({})):
@@ -143,7 +144,7 @@ def simplify_collections(settings: Settings | None = None) -> dict:
         db.repos.insert_many(list(normalized_repos.values()))
 
     source_issues = list(db.issues.find({}))
-    if db.items.count_documents({}) > 0:
+    if "items" in collection_names and db.items.count_documents({}) > 0:
         source_issues.extend(list(db.items.find({})))
 
     normalized_issues: dict[str, dict] = {}
@@ -173,9 +174,9 @@ def simplify_collections(settings: Settings | None = None) -> dict:
         db.issues.delete_many({})
         db.issues.insert_many(list(normalized_issues.values()))
 
-    if "items" in db.list_collection_names():
+    if "items" in collection_names:
         db.items.drop()
-    if "syncRuns" in db.list_collection_names():
+    if "syncRuns" in collection_names:
         db.syncRuns.drop()
 
     ensure_indexes(db)
