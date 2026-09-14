@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nicegui import ui
+from nicegui import run, ui
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
@@ -39,7 +39,10 @@ def _parse_dt(value: str):
     value = value.strip()
     if not value:
         return None
-    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -106,16 +109,18 @@ def _build_ui():
                     if not repo_id or not name:
                         ui.notify("id and name are required", color="negative")
                         return
+                    if db.repos.find_one({"id": repo_id}):
+                        ui.notify("repo already exists", color="warning")
+                        return
                     db.repos.update_one(
-                        {"_id": repo_id},
+                        {"id": repo_id},
                         {
-                            "$set": {
+                            "$setOnInsert": {
+                                "_id": repo_id,
                                 "id": repo_id,
                                 "name": name,
                                 "status": "Live",
                                 "lastUpdated": None,
-                            },
-                            "$setOnInsert": {
                                 "involvedDevs": payload["involvedDevs"],
                                 "products": payload["products"],
                                 "lastTested": payload["lastTested"],
@@ -356,19 +361,19 @@ def _build_ui():
             ui.label("Reports / Export").classes("text-h6")
             ui.label("Generate local markdown and CSV exports from simplified model.")
 
-            def export_reports():
-                path = generate_report(db, Path("reports"))
+            async def export_reports():
+                path = await run.io_bound(generate_report, db, Path("reports"))
                 ui.notify(f"Exported report to {path}", color="positive")
 
-            def run_sync():
-                result = sync(recently_closed_days=30)
+            async def run_sync():
+                result = await run.io_bound(sync, None, 30)
                 ui.notify(f"Synced {result['repoCount']} repo(s), {result['issueCount']} issue/pr records", color="positive")
                 refresh_repos()
                 refresh_issues()
                 refresh_tasks()
 
-            def run_simplify():
-                result = simplify_collections()
+            async def run_simplify():
+                result = await run.io_bound(simplify_collections)
                 ui.notify(f"Simplified to {result['repos']} repos and {result['issues']} issue/pr records", color="positive")
                 refresh_repos()
                 refresh_issues()

@@ -19,7 +19,7 @@ ISSUE_TYPE_VALUES = [
 
 RESOLUTION_VALUES = [
     "Updated UI or code or versions",
-    "Commented or added the requested add",
+    "Commented or added the requested content",
     "Report to Skillable",
     "Added note or warning",
     "Not applicable",

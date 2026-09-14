@@ -10,7 +10,7 @@ def _as_aware(value):
     if value is None:
         return None
     if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
@@ -20,6 +20,11 @@ def _number_from_issue_id(issue_id: str | None) -> str:
     if not issue_id or "#" not in issue_id:
         return ""
     return issue_id.split("#")[-1]
+
+
+def _number_for_sort(task: dict) -> int:
+    number = str(task.get("number") or "").strip()
+    return int(number) if number.isdigit() else 0
 
 
 def _issue_task(priority: int, reason: str, issue: dict) -> dict:
@@ -75,4 +80,4 @@ def generate_tasks(db) -> list[dict]:
         if last_updated and (last_tested is None or last_updated > last_tested):
             tasks.append(_repo_task(35, "Repo changed after last tested (or never tested): retest repo/lab", repo))
 
-    return sorted(tasks, key=lambda task: (task["priority"], task.get("repoId") or "", task.get("number") or ""))
+    return sorted(tasks, key=lambda task: (task["priority"], task.get("repoId") or "", _number_for_sort(task)))

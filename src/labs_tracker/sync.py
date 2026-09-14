@@ -81,10 +81,10 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
         repo_id = repo_doc["id"]
 
         db.repos.update_one(
-            {"_id": repo_id},
+            {"id": repo_id},
             {
                 "$set": repo_doc,
-                "$setOnInsert": default_repo_manual_fields(repo_id),
+                "$setOnInsert": {"_id": repo_id, **default_repo_manual_fields(repo_id)},
             },
             upsert=True,
         )
@@ -101,10 +101,10 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
             issue_doc = _issue_document(repo_id, issue)
             issue_id = issue_doc["issueId"]
             db.issues.update_one(
-                {"_id": issue_id},
+                {"issueId": issue_id},
                 {
                     "$set": issue_doc,
-                    "$setOnInsert": default_issue_manual_fields(issue.state),
+                    "$setOnInsert": {"_id": issue_id, **default_issue_manual_fields(issue.state)},
                 },
                 upsert=True,
             )
