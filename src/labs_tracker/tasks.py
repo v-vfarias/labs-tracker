@@ -1,10 +1,9 @@
-"""Daily task generation from current MongoDB state."""
+"""Daily task generation from simplified MongoDB state."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from datetime import datetime, timezone
 
-from .models import KIND_PR
+from .models import KIND_ISSUE, KIND_PR, STATE_CLOSED, STATE_OPEN
 
 
 def _as_aware(value):
@@ -17,16 +16,28 @@ def _as_aware(value):
     return value
 
 
-def _item_task(priority: int, reason: str, item: dict) -> dict:
+def _number_from_issue_id(issue_id: str | None) -> str:
+    if not issue_id or "#" not in issue_id:
+        return ""
+    return issue_id.split("#")[-1]
+
+
+def _number_for_sort(task: dict) -> int:
+    number = str(task.get("number") or "").strip()
+    return int(number) if number.isdigit() else 0
+
+
+def _issue_task(priority: int, reason: str, issue: dict) -> dict:
+    issue_id = issue.get("issueId")
     return {
         "priority": priority,
         "reason": reason,
-        "repoId": item.get("repoId"),
-        "itemId": item.get("id"),
-        "number": item.get("number"),
-        "title": item.get("title"),
-        "kind": item.get("kind"),
-        "url": item.get("url"),
+        "repoId": issue.get("repoId"),
+        "issueId": issue_id,
+        "number": _number_from_issue_id(issue_id),
+        "title": issue.get("title"),
+        "kind": issue.get("kind"),
+        "state": issue.get("state"),
     }
 
 
@@ -35,55 +46,38 @@ def _repo_task(priority: int, reason: str, repo: dict) -> dict:
         "priority": priority,
         "reason": reason,
         "repoId": repo.get("id"),
-        "itemId": None,
-        "number": None,
-        "title": repo.get("fullName") or repo.get("name"),
-        "kind": "repo",
-        "url": repo.get("htmlUrl"),
+        "issueId": None,
+        "number": "",
+        "title": repo.get("name"),
+        "kind": "Repo",
+        "state": repo.get("status"),
     }
 
 
 def generate_tasks(db) -> list[dict]:
     tasks: list[dict] = []
-    now = datetime.now(timezone.utc)
 
-    for item in db.items.find({}):
-        state = item.get("state")
-        kind = item.get("kind")
-        test_result = item.get("testResult")
-        last_tested = _as_aware(item.get("lastTested"))
-        updated_at = _as_aware(item.get("updatedAt"))
-        created_at = _as_aware(item.get("createdAt"))
-        is_untested = last_tested is None or test_result == "Not tested"
+    for issue in db.issues.find({}):
+        state = issue.get("state")
+        kind = issue.get("kind")
+        last_tested = _as_aware(issue.get("lastTested"))
 
-        if item.get("typeOfIssue") == "Unknown" or item.get("resolution") == "Unknown":
-            tasks.append(_item_task(20, "New/unclassified issue or PR: triage/classify", item))
+        if state == STATE_OPEN and issue.get("typeOfIssue") == "Unknown":
+            tasks.append(_issue_task(20, "Open issue/PR with unknown type: classify", issue))
 
-        if state == "open" and kind != KIND_PR and is_untested:
-            tasks.append(_item_task(30, "Open issue needs reproduction verification", item))
+        if state == STATE_OPEN and kind == KIND_ISSUE and last_tested is None:
+            tasks.append(_issue_task(30, "Open issue missing lastTested: test whether it reproduces", issue))
 
-        if state == "open" and kind == KIND_PR and not item.get("draft", False) and is_untested:
-            tasks.append(_item_task(30, "Open PR needs maintainer validation", item))
+        if state == STATE_OPEN and kind == KIND_PR and last_tested is None:
+            tasks.append(_issue_task(30, "Open PR missing lastTested: validate PR for maintainers", issue))
 
-        if state == "closed" and last_tested is None:
-            tasks.append(_item_task(40, "Closed GitHub issue/PR needs validation recorded", item))
-
-        if (
-            state == "open"
-            and kind == KIND_PR
-            and is_untested
-            and created_at is not None
-            and created_at < now - timedelta(days=14)
-        ):
-            tasks.append(_item_task(50, "Aging contribution: PR open over 14 days and untested", item))
-
-        if updated_at and last_tested and updated_at > last_tested:
-            tasks.append(_item_task(60, "Item changed after last validation", item))
+        if state == STATE_CLOSED and last_tested is None:
+            tasks.append(_issue_task(40, "Closed item missing lastTested: record validation", issue))
 
     for repo in db.repos.find({}):
         last_updated = _as_aware(repo.get("lastUpdated"))
         last_tested = _as_aware(repo.get("lastTested"))
         if last_updated and (last_tested is None or last_updated > last_tested):
-            tasks.append(_repo_task(35, "Repo changed after last test; retest after repo changes", repo))
+            tasks.append(_repo_task(35, "Repo changed after last tested (or never tested): retest repo/lab", repo))
 
-    return sorted(tasks, key=lambda task: (task["priority"], task.get("repoId") or "", task.get("number") or 0))
+    return sorted(tasks, key=lambda task: (task["priority"], task.get("repoId") or "", _number_for_sort(task)))

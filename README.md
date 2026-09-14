@@ -1,44 +1,55 @@
 # labs-tracker
 
-Local-only pilot for tracking lab repository issues, pull requests, validation, and resolution evidence.
+Local-only pilot for tracking lab repositories and their issues/PRs with a simplified, user-controlled schema.
 
-The first pilot repository is [`MicrosoftLearning/mslearn-ai-language`](https://github.com/MicrosoftLearning/mslearn-ai-language). GitHub remains the source of truth for repository, issue, and pull request metadata. MongoDB stores the synced GitHub data plus manually maintained validation/classification fields that help explain how the lab is doing.
+GitHub is the source of truth for refreshes. MongoDB stores only a small set of synced fields plus manual fields you control.
 
-This is intentionally a personal/local pilot, not a hosted application.
+## Simplified data model
 
-## What “tested” means
+Two primary collections are used:
 
-In this pilot, **tested** means you checked a GitHub issue or pull request and verified the behavior:
+- `repos`
+- `issues`
 
-- for an issue, whether the reported problem reproduces;
-- for a pull request, whether the proposed fix validates for maintainers.
+### `repos`
 
-## Data model
+```json
+{
+  "id": "owner/repo",
+  "name": "repo",
+  "involvedDevs": [],
+  "products": ["Azure AI Language"],
+  "status": "Archived | Live",
+  "lastUpdated": "datetime",
+  "lastTested": null
+}
+```
 
-MongoDB uses three collections:
+### `issues`
 
-- `repos` — one document per tracked GitHub repository/lab.
-- `items` — one document per GitHub issue or pull request.
-- `syncRuns` — one document per sync attempt.
-
-Daily refreshes overwrite GitHub-owned fields such as titles, labels, assignees, issue state, PR branch, draft state, timestamps, and repository metadata. Manual fields are only created for new items and are preserved on later syncs:
-
-- `typeOfIssue`
-- `resolution`
-- `status`
-- `testResult`
-- `lastTested`
-- `notes`
+```json
+{
+  "issueId": "owner/repo#123",
+  "repoId": "owner/repo",
+  "kind": "Issue | PR",
+  "title": "String",
+  "state": "Open | Closed",
+  "typeOfIssue": "UI drift | Outdated version | Nice to have | Skillable capacity | Product consistency | Unknown",
+  "resolution": "Updated UI or code or versions | Commented or added the requested content | Report to Skillable | Added note or warning | Not applicable | Unknown",
+  "status": "Closed | In review | Not applicable | Open",
+  "lastTested": null
+}
+```
 
 ## Setup
 
-### 1. Create your environment file
+### 1) Configure `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and add a GitHub token:
+Set values:
 
 ```env
 MONGO_URI=mongodb://localhost:27017
@@ -47,17 +58,13 @@ GITHUB_TOKEN=<your-github-token>
 TRACKED_REPOS=MicrosoftLearning/mslearn-ai-language
 ```
 
-### 2. Start MongoDB
+### 2) Start local MongoDB
 
 ```bash
 docker compose up -d
 ```
 
-MongoDB runs locally on `localhost:27017` and persists data in a named Docker volume.
-
-### 3. Install Python dependencies
-
-Using a virtual environment is recommended:
+### 3) Install dependencies
 
 ```bash
 python -m venv .venv
@@ -66,82 +73,66 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### 4. Run the initial GitHub sync
+## Main commands
 
 ```bash
 python -m labs_tracker.cli sync
-```
-
-The first sync creates or updates the repo document and issue/PR item documents for the tracked repository. Running sync again updates GitHub metadata while preserving manual validation fields.
-
-### 5. View generated tasks
-
-```bash
+python -m labs_tracker.cli simplify --yes
 python -m labs_tracker.cli tasks
-```
-
-Tasks are generated dynamically from MongoDB state. Examples include unclassified issues/PRs, open issues needing reproduction checks, open non-draft PRs needing validation, repos changed after last testing, closed items without validation, and aging untested PRs.
-
-### 6. Classify and validate items
-
-```bash
 python -m labs_tracker.cli classify
-```
-
-The command lists unclassified or untested items, then prompts for:
-
-- issue type
-- resolution
-- manual status
-- test result
-- last tested date
-- notes
-
-### 7. Open the Streamlit dashboard
-
-```bash
-streamlit run app.py
-```
-
-Dashboard views include:
-
-- Repo health overview
-- Issue breakdown
-- PR validation queue
-- Tasks of the day
-- Recently closed/resolved items
-
-Filters are available by repo, kind, status, type, and test result where practical.
-
-### 8. Export reports
-
-```bash
 python -m labs_tracker.cli export
+python -m labs_tracker.cli web
 ```
 
-This writes the following files to `reports/`:
+If installed with `pip install -e .`, you can use `labs-tracker <command>`.
+
+## Local CRUD web app (NiceGUI)
+
+Run:
+
+```bash
+python -m labs_tracker.web
+```
+
+or:
+
+```bash
+python -m labs_tracker.cli web
+```
+
+Default URL: `http://127.0.0.1:8080`
+
+Pages:
+
+1. **Repos**: list/create/delete repos and edit manual repo fields (`involvedDevs`, `products`, `lastTested`).
+2. **Issues/PRs**: list/filter/create/delete issue/PR records and edit manual fields (`typeOfIssue`, `resolution`, `status`, `lastTested`).
+3. **Tasks**: generated task queue from the simplified model.
+4. **Reports/Export**: sync, simplify existing data, and export reports.
+
+## Sync behavior
+
+`sync` upserts tracked repos and open issues/PRs (plus recently closed records) using only GitHub-owned fields:
+
+- repos: `name`, `status`, `lastUpdated`
+- issues: `kind`, `title`, `state`
+
+Manual fields are preserved across syncs via `$setOnInsert` defaults and user edits.
+
+## Migrating old complex documents
+
+If you previously synced with the old complex schema, run:
+
+```bash
+python -m labs_tracker.cli simplify --yes
+```
+
+This normalizes old data into strict `repos` and `issues` shapes and removes legacy collections (`items`, `syncRuns`).
+
+## Exports
+
+`export` writes local files under `reports/`:
 
 - `report.md`
 - `repos.csv`
-- `items.csv`
+- `issues.csv`
 - `tasks.csv`
-
-`reports/` is ignored by Git because reports are local generated output.
-
-## CLI commands
-
-```bash
-python -m labs_tracker.cli sync
-python -m labs_tracker.cli tasks
-python -m labs_tracker.cli classify
-python -m labs_tracker.cli export
-```
-
-If installed with `pip install -e .`, you can also run:
-
-```bash
-labs-tracker sync
-labs-tracker tasks
-labs-tracker classify
-labs-tracker export
-```
