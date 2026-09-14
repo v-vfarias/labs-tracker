@@ -1,4 +1,4 @@
-"""Markdown and CSV report generation."""
+"""Markdown and CSV report generation for simplified collections."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .models import KIND_ISSUE, KIND_PR, STATE_OPEN
 from .tasks import generate_tasks
 
 
@@ -51,8 +52,6 @@ def _format_cell(value) -> str:
         return ""
     if isinstance(value, (list, tuple, set)):
         value = ", ".join(str(item) for item in value)
-    if isinstance(value, dict):
-        value = str(value)
     elif pd.isna(value):
         return ""
     return str(value).replace("|", "\\|").replace("\n", " ")
@@ -63,70 +62,61 @@ def generate_report(db, output_dir: str | Path = "reports") -> Path:
     output_path.mkdir(parents=True, exist_ok=True)
 
     repos = _records(db.repos.find({}))
-    items = _records(db.items.find({}))
+    issues = _records(db.issues.find({}))
     tasks = generate_tasks(db)
 
     repos_df = pd.DataFrame(repos)
-    items_df = pd.DataFrame(items)
+    issues_df = pd.DataFrame(issues)
     tasks_df = pd.DataFrame(tasks)
 
     repos_df.to_csv(output_path / "repos.csv", index=False)
-    items_df.to_csv(output_path / "items.csv", index=False)
+    issues_df.to_csv(output_path / "issues.csv", index=False)
     tasks_df.to_csv(output_path / "tasks.csv", index=False)
 
-    open_items = items_df[items_df.get("state", pd.Series(dtype=str)) == "open"] if not items_df.empty else items_df
-    open_issues = open_items[open_items.get("kind", pd.Series(dtype=str)) == "issue"] if not open_items.empty else open_items
-    open_prs = open_items[open_items.get("kind", pd.Series(dtype=str)) == "pr"] if not open_items.empty else open_items
-    pr_queue = open_prs[
-        (open_prs.get("draft", pd.Series(False, index=open_prs.index)) != True)
-        & (open_prs.get("testResult", pd.Series(dtype=str)) == "Not tested")
-    ] if not open_prs.empty else open_prs
-    closed_items = items_df[items_df.get("state", pd.Series(dtype=str)) == "closed"] if not items_df.empty else items_df
-    if not closed_items.empty and "closedAt" in closed_items:
-        closed_items = closed_items.sort_values("closedAt", ascending=False)
+    open_items = issues_df[issues_df.get("state", pd.Series(dtype=str)) == STATE_OPEN] if not issues_df.empty else issues_df
+    open_issues = open_items[open_items.get("kind", pd.Series(dtype=str)) == KIND_ISSUE] if not open_items.empty else open_items
+    open_prs = open_items[open_items.get("kind", pd.Series(dtype=str)) == KIND_PR] if not open_items.empty else open_items
+    closed_items = issues_df[issues_df.get("state", pd.Series(dtype=str)) != STATE_OPEN] if not issues_df.empty else issues_df
 
     markdown = [
         "# Labs Tracker Report",
         "",
         f"Generated: {datetime.now(timezone.utc).isoformat()}",
         "",
-        "## Repos tracked and health signals",
+        "## Repos",
         "",
-        _items_table(repos_df, ["id", "status", "lastUpdated", "lastTested", "products"]),
+        _items_table(repos_df, ["id", "name", "status", "lastUpdated", "lastTested", "products", "involvedDevs"]),
         "",
-        "## Open issues",
+        "## Open Issues",
         "",
-        _items_table(open_issues, ["repoId", "number", "title", "typeOfIssue", "testResult", "url"]),
+        _items_table(open_issues, ["issueId", "repoId", "title", "typeOfIssue", "status", "lastTested"]),
         "",
-        "## Open PRs needing validation",
+        "## Open PRs",
         "",
-        _items_table(pr_queue, ["repoId", "number", "title", "branch", "testResult", "url"]),
+        _items_table(open_prs, ["issueId", "repoId", "title", "typeOfIssue", "status", "lastTested"]),
         "",
-        "## Recently resolved/closed items",
+        "## Closed Items",
         "",
-        _items_table(closed_items, ["repoId", "number", "kind", "title", "resolution", "lastTested", "url"]),
+        _items_table(closed_items, ["issueId", "repoId", "kind", "title", "resolution", "status", "lastTested"]),
         "",
-        "## Counts by issue type",
+        "## Counts by typeOfIssue",
         "",
-        _count_table(items_df, "typeOfIssue"),
+        _count_table(issues_df, "typeOfIssue"),
         "",
         "## Counts by resolution",
         "",
-        _count_table(items_df, "resolution"),
+        _count_table(issues_df, "resolution"),
         "",
         "## Counts by status",
         "",
-        _count_table(items_df, "status"),
+        _count_table(issues_df, "status"),
         "",
-        "## Counts by test result",
+        "## Tasks",
         "",
-        _count_table(items_df, "testResult"),
-        "",
-        "## Tasks of the day",
-        "",
-        _items_table(tasks_df, ["priority", "reason", "repoId", "number", "kind", "title", "url"], limit=50),
+        _items_table(tasks_df, ["priority", "reason", "repoId", "issueId", "kind", "title", "state"], limit=50),
         "",
     ]
+
     report_path = output_path / "report.md"
     report_path.write_text("\n".join(markdown), encoding="utf-8")
     return report_path

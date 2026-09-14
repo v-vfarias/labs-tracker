@@ -22,9 +22,6 @@ def ensure_indexes(db: Database) -> None:
     db.repos.create_index([("status", ASCENDING)])
     db.repos.create_index([("lastUpdated", ASCENDING)])
 
-    db.items.create_index([("id", ASCENDING)], unique=True)
-    db.items.create_index([("repoId", ASCENDING), ("kind", ASCENDING)])
-    db.items.create_index([("state", ASCENDING), ("updatedAt", ASCENDING)])
-    db.items.create_index([("status", ASCENDING), ("testResult", ASCENDING)])
-
-    db.syncRuns.create_index([("startedAt", ASCENDING)])
+    db.issues.create_index([("issueId", ASCENDING)], unique=True)
+    db.issues.create_index([("repoId", ASCENDING), ("kind", ASCENDING), ("state", ASCENDING)])
+    db.issues.create_index([("typeOfIssue", ASCENDING), ("status", ASCENDING)])

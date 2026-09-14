@@ -1,8 +1,12 @@
-"""Shared values and helpers for the lab tracker data model."""
+"""Shared values and helpers for the simplified lab tracker data model."""
 
-KIND_ISSUE = "issue"
-KIND_PR = "pr"
+KIND_ISSUE = "Issue"
+KIND_PR = "PR"
 KIND_VALUES = [KIND_ISSUE, KIND_PR]
+
+STATE_OPEN = "Open"
+STATE_CLOSED = "Closed"
+STATE_VALUES = [STATE_OPEN, STATE_CLOSED]
 
 ISSUE_TYPE_VALUES = [
     "UI drift",
@@ -14,27 +18,32 @@ ISSUE_TYPE_VALUES = [
 ]
 
 RESOLUTION_VALUES = [
-    "Updated UI/code/version",
-    "Added requested content",
-    "Reported to Skillable",
+    "Updated UI or code or versions",
+    "Commented or added the requested add",
+    "Report to Skillable",
     "Added note or warning",
     "Not applicable",
-    "Unresolved",
     "Unknown",
 ]
 
-STATUS_VALUES = ["Open", "In review", "Closed", "Not applicable"]
-TEST_RESULT_VALUES = ["Reproduced", "Not reproduced", "Blocked", "Not tested"]
+STATUS_VALUES = ["Closed", "In review", "Not applicable", "Open"]
 
 
-def default_manual_fields(github_state: str | None = None) -> dict:
-    """Return manual fields used only when an item is first inserted."""
-    status = "Closed" if github_state == "closed" else "Open"
+def default_repo_manual_fields(repo_id: str) -> dict:
+    products = ["Azure AI Language"] if repo_id.lower() == "microsoftlearning/mslearn-ai-language" else []
+    return {
+        "involvedDevs": [],
+        "products": products,
+        "lastTested": None,
+    }
+
+
+def default_issue_manual_fields(github_state: str | None = None) -> dict:
+    state = (github_state or "").lower()
+    status = "Closed" if state == "closed" else "Open"
     return {
         "typeOfIssue": "Unknown",
         "resolution": "Unknown",
         "status": status,
-        "testResult": "Not tested",
         "lastTested": None,
-        "notes": "",
     }
