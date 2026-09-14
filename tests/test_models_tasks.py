@@ -24,10 +24,26 @@ class FakeCollection:
         return len(self.docs)
 
     def delete_many(self, query=None):
+        if not query:
+            self.docs = []
+            return
+        ids = query.get("_id", {}).get("$nin")
+        if ids is not None:
+            self.docs = [doc for doc in self.docs if doc.get("_id") in ids]
+            return
         self.docs = []
 
     def insert_many(self, docs):
         self.docs = list(docs)
+
+    def replace_one(self, query, doc, upsert=False):
+        key, value = next(iter(query.items()))
+        for index, existing in enumerate(self.docs):
+            if existing.get(key) == value:
+                self.docs[index] = dict(doc)
+                return
+        if upsert:
+            self.docs.append(dict(doc))
 
     def drop(self):
         self.docs = []

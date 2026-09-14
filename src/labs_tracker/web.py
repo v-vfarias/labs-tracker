@@ -190,7 +190,7 @@ def _build_ui():
         with ui.tab_panel(issues_tab):
             ui.label("Issues / PRs").classes("text-h6")
             with ui.row().classes("items-center"):
-                repo_filter = ui.select([], value="All", label="repo")
+                repo_filter = ui.select(["All"], value="All", label="repo")
                 kind_filter = ui.select(["All", *KIND_VALUES], value="All", label="kind")
                 state_filter = ui.select(["All", *STATE_VALUES], value="All", label="state")
                 type_filter = ui.select(["All", *ISSUE_TYPE_VALUES], value="All", label="typeOfIssue")
@@ -268,7 +268,7 @@ def _build_ui():
                         ui.notify("issue/pr already exists", color="warning")
                         return
                     db.issues.update_one(
-                        {"_id": issue_id},
+                        {"issueId": issue_id},
                         {
                             "$set": {
                                 "issueId": issue_id,
@@ -277,7 +277,8 @@ def _build_ui():
                                 "title": title,
                                 "state": state,
                                 **manual,
-                            }
+                            },
+                            "$setOnInsert": {"_id": issue_id},
                         },
                         upsert=True,
                     )

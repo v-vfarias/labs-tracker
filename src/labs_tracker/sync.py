@@ -142,8 +142,10 @@ def simplify_collections(settings: Settings | None = None, confirm: bool = False
         }
 
     if normalized_repos:
-        db.repos.delete_many({})
-        db.repos.insert_many(list(normalized_repos.values()))
+        repo_ids = list(normalized_repos.keys())
+        for repo_id, repo_doc in normalized_repos.items():
+            db.repos.replace_one({"_id": repo_id}, repo_doc, upsert=True)
+        db.repos.delete_many({"_id": {"$nin": repo_ids}})
 
     source_issues = []
     if "items" in collection_names and db.items.count_documents({}) > 0:
@@ -174,8 +176,10 @@ def simplify_collections(settings: Settings | None = None, confirm: bool = False
         }
 
     if normalized_issues:
-        db.issues.delete_many({})
-        db.issues.insert_many(list(normalized_issues.values()))
+        issue_ids = list(normalized_issues.keys())
+        for issue_id, issue_doc in normalized_issues.items():
+            db.issues.replace_one({"_id": issue_id}, issue_doc, upsert=True)
+        db.issues.delete_many({"_id": {"$nin": issue_ids}})
 
     if "items" in collection_names:
         db.items.drop()
