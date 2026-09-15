@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .models import KIND_ISSUE, KIND_PR, STATE_OPEN
+from .models import KIND_ISSUE, KIND_PR, STATE_OPEN, normalize_issue_type, normalize_resolution
 from .tasks import generate_tasks
 
 
@@ -68,6 +68,11 @@ def generate_report(db, output_dir: str | Path = "reports") -> Path:
     repos_df = pd.DataFrame(repos)
     issues_df = pd.DataFrame(issues)
     tasks_df = pd.DataFrame(tasks)
+    if not issues_df.empty:
+        if "typeOfIssue" in issues_df:
+            issues_df["typeOfIssue"] = issues_df["typeOfIssue"].apply(normalize_issue_type)
+        if "resolution" in issues_df:
+            issues_df["resolution"] = issues_df["resolution"].apply(normalize_resolution)
 
     repos_df.to_csv(output_path / "repos.csv", index=False)
     issues_df.to_csv(output_path / "issues.csv", index=False)

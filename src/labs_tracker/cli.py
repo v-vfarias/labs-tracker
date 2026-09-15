@@ -2,20 +2,16 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.table import Table
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
-from .models import ISSUE_TYPE_VALUES, RESOLUTION_VALUES, STATUS_VALUES
-from .report import generate_report
+from .models import ISSUE_TYPE_VALUES, RESOLUTION_VALUES, STATUS_VALUES, normalize_issue_type, normalize_resolution
 from .sync import simplify_collections, sync as run_sync
-from .tasks import generate_tasks
 
-app = typer.Typer(help="Local GitHub lab issue/PR validation tracker.")
+app = typer.Typer(help="Local GitHub lab issue validation tracker.")
 console = Console()
 
 
@@ -36,10 +32,10 @@ def _choose(prompt: str, choices: list[str], default: str) -> str:
 
 
 @app.command()
-def sync(recently_closed_days: int = typer.Option(30, help="Closed items updated within this many days are synced.")):
-    """Run GitHub sync for TRACKED_REPOS."""
-    result = run_sync(recently_closed_days=recently_closed_days)
-    console.print(f"Synced {result['repoCount']} repo(s) and {result['issueCount']} issue/pr record(s).")
+def sync(closed_issue_limit: int = typer.Option(10, help="Most recent closed issues to sync per repo.")):
+    """Run GitHub issue sync for TRACKED_REPOS."""
+    result = run_sync(closed_issue_limit=closed_issue_limit)
+    console.print(f"Synced {result['repoCount']} repo(s) and {result['issueCount']} issue record(s).")
 
 
 @app.command()
@@ -48,19 +44,7 @@ def simplify(yes: bool = typer.Option(False, "--yes", help="Confirm destructive 
     if not yes:
         raise typer.BadParameter("This command is destructive. Re-run with --yes to confirm.")
     result = simplify_collections(confirm=True)
-    console.print(f"Simplified collections: {result['repos']} repo(s), {result['issues']} issue/pr record(s).")
-
-
-@app.command()
-def tasks():
-    """Print generated tasks of the day."""
-    generated = generate_tasks(_db())
-    table = Table(title="Tasks of the day")
-    for column in ["priority", "reason", "repoId", "issueId", "kind", "state", "title"]:
-        table.add_column(column)
-    for task in generated:
-        table.add_row(*[str(task.get(column) or "") for column in ["priority", "reason", "repoId", "issueId", "kind", "state", "title"]])
-    console.print(table)
+    console.print(f"Simplified collections: {result['repos']} repo(s), {result['issues']} issue record(s).")
 
 
 @app.command()
@@ -77,7 +61,7 @@ def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested i
     }
     items = list(db.issues.find(query).sort([("issueId", 1)]).limit(limit))
     if not items:
-        console.print("No open unknown/untested issue/pr records found.")
+        console.print("No open unknown/untested issue records found.")
         return
 
     for index, item in enumerate(items, start=1):
@@ -87,8 +71,8 @@ def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested i
         raise typer.BadParameter("Select a listed item number")
     item = items[int(selected) - 1]
 
-    type_of_issue = _choose("Type of issue", ISSUE_TYPE_VALUES, item.get("typeOfIssue", "Unknown"))
-    resolution = _choose("Resolution", RESOLUTION_VALUES, item.get("resolution", "Unknown"))
+    type_of_issue = _choose("Type of issue", ISSUE_TYPE_VALUES, normalize_issue_type(item.get("typeOfIssue")))
+    resolution = _choose("Resolution", RESOLUTION_VALUES, normalize_resolution(item.get("resolution")))
     status = _choose("Manual status", STATUS_VALUES, item.get("status", "Open"))
     default_last_tested = date.today().isoformat() if item.get("lastTested") is None else ""
     last_tested_input = typer.prompt("Last tested date (YYYY-MM-DD, blank to keep empty)", default=default_last_tested)
@@ -100,21 +84,14 @@ def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested i
         {"issueId": item["issueId"]},
         {
             "$set": {
-                "typeOfIssue": type_of_issue,
-                "resolution": resolution,
+                "typeOfIssue": normalize_issue_type(type_of_issue),
+                "resolution": normalize_resolution(resolution),
                 "status": status,
                 "lastTested": last_tested,
             }
         },
     )
     console.print(f"Updated {item['issueId']}.")
-
-
-@app.command()
-def export(output_dir: Path = typer.Option(Path("reports"), help="Directory for Markdown and CSV exports.")):
-    """Write Markdown report plus repo, issues, and task CSV files."""
-    report_path = generate_report(_db(), output_dir)
-    console.print(f"Report written to {report_path}")
 
 
 @app.command()

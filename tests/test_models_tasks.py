@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from labs_tracker.models import default_issue_manual_fields
+from labs_tracker.models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATUS_VALUES, default_issue_manual_fields, default_repo_manual_fields
 from labs_tracker.sync import simplify_collections
 from labs_tracker.tasks import generate_tasks
 
@@ -27,14 +27,26 @@ class FakeCollection:
         if not query:
             self.docs = []
             return
-        ids = query.get("_id", {}).get("$nin")
-        if ids is not None:
-            self.docs = [doc for doc in self.docs if doc.get("_id") in ids]
-            return
+        for key, condition in query.items():
+            if isinstance(condition, dict) and "$nin" in condition:
+                allowed = condition["$nin"]
+                self.docs = [doc for doc in self.docs if doc.get(key) in allowed]
+                return
         self.docs = []
 
     def insert_many(self, docs):
         self.docs = list(docs)
+
+    def update_one(self, query, update, upsert=False):
+        key, value = next(iter(query.items()))
+        for existing in self.docs:
+            if existing.get(key) == value:
+                existing.update(update.get("$set", {}))
+                return
+        if upsert:
+            doc = dict(update.get("$setOnInsert", {}))
+            doc.update(update.get("$set", {}))
+            self.docs.append(doc)
 
     def replace_one(self, query, doc, upsert=False):
         key, value = next(iter(query.items()))
@@ -66,12 +78,51 @@ class FakeDb:
 
 
 class ModelTaskTests(unittest.TestCase):
+    def test_repo_metadata_options_include_tracked_owners_and_products(self):
+        self.assertIn("Graeme Malcolm", OWNER_VALUES)
+        self.assertIn("Juliane Padrao", OWNER_VALUES)
+        self.assertIn("Foundry", PRODUCT_VALUES)
+        self.assertIn("Foundry Toolkit for VS Code", PRODUCT_VALUES)
+        self.assertIn("GitHub Actions", PRODUCT_VALUES)
+
+    def test_issue_metadata_options_include_manual_review_observations(self):
+        self.assertEqual(
+            ISSUE_TYPE_VALUES,
+            [
+                "UI drift",
+                "Skillable",
+                "SDK/code issues",
+                "Outdated versions",
+                "User intent/setup mismatch",
+                "Lab content clarity",
+                "Product/service behavior",
+                "Enhancement request",
+                "Unknown",
+            ],
+        )
+        self.assertEqual(ISSUE_TYPE_ALIASES["Support reproduction/setup"], "User intent/setup mismatch")
+        self.assertEqual(ISSUE_TYPE_ALIASES["Modular suggestion"], "Enhancement request")
+        self.assertEqual(ISSUE_TYPE_ALIASES["SDK/code update"], "SDK/code issues")
+        self.assertEqual(
+            RESOLUTION_VALUES,
+            ["Fixed in lab", "Linked PR", "Replied/no lab change", "Reported externally", "Duplicate", "Cannot reproduce", "Not applicable", "Unknown"],
+        )
+        self.assertEqual(RESOLUTION_ALIASES["Updated code/sample"], "Fixed in lab")
+        self.assertIn("Resolved locally", STATUS_VALUES)
+        self.assertIn("Waiting owner review", STATUS_VALUES)
+        self.assertIn("Temporary/out of scope", STATUS_VALUES)
+
     def test_default_manual_fields_preserve_unknown_classification(self):
         fields = default_issue_manual_fields("open")
         self.assertEqual(fields["typeOfIssue"], "Unknown")
         self.assertEqual(fields["resolution"], "Unknown")
         self.assertEqual(fields["status"], "Open")
         self.assertIsNone(fields["lastTested"])
+        self.assertEqual(fields["closingPrUrl"], "")
+
+    def test_default_repo_manual_fields_use_broad_foundry_bucket(self):
+        fields = default_repo_manual_fields("MicrosoftLearning/mslearn-ai-language")
+        self.assertEqual(fields["products"], ["Foundry"])
 
     def test_generate_tasks_matches_simplified_rules(self):
         now = datetime.now(timezone.utc)
@@ -143,11 +194,11 @@ class ModelTaskTests(unittest.TestCase):
                     "_id": "legacy-item",
                     "id": "owner/repo#7",
                     "repoId": "owner/repo",
-                    "kind": "pr",
+                    "kind": "issue",
                     "title": "Legacy title",
                     "state": "open",
-                    "typeOfIssue": "Unknown",
-                    "resolution": "Invalid resolution",
+                    "typeOfIssue": "Support reproduction/setup",
+                    "resolution": "Updated code/sample",
                     "status": "In review",
                     "testResult": "Not tested",
                     "lastTested": None,
@@ -166,12 +217,13 @@ class ModelTaskTests(unittest.TestCase):
 
         issue = db.issues.docs[0]
         self.assertEqual(issue["issueId"], "owner/repo#7")
-        self.assertEqual(issue["kind"], "PR")
+        self.assertEqual(issue["kind"], "Issue")
         self.assertEqual(issue["state"], "Open")
-        self.assertEqual(issue["resolution"], "Unknown")
+        self.assertEqual(issue["typeOfIssue"], "User intent/setup mismatch")
+        self.assertEqual(issue["resolution"], "Fixed in lab")
         self.assertEqual(
             sorted(issue.keys()),
-            sorted(["_id", "issueId", "repoId", "kind", "title", "state", "typeOfIssue", "resolution", "status", "lastTested"]),
+            sorted(["_id", "issueId", "repoId", "kind", "title", "state", "typeOfIssue", "resolution", "status", "lastTested", "closingPrUrl"]),
         )
 
     def test_simplify_requires_confirm_flag(self):

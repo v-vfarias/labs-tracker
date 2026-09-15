@@ -7,6 +7,23 @@ import os
 from dotenv import load_dotenv
 
 
+DEFAULT_TRACKED_REPOS = [
+    "MicrosoftLearning/mslearn-ai-agents",
+    "MicrosoftLearning/mslearn-ai-fundamentals",
+    "MicrosoftLearning/mslearn-ai-language",
+    "MicrosoftLearning/mslearn-ai-studio",
+    "MicrosoftLearning/mslearn-ai-vision",
+    "MicrosoftLearning/mslearn-devops",
+    "MicrosoftLearning/mslearn-genaiops",
+    "MicrosoftLearning/mslearn-mlops",
+    "MicrosoftLearning/mslearn-azure-ai",
+    "MicrosoftLearning/mslearn-ai-information-extraction",
+    "MicrosoftLearning/dp-300-database-administrator",
+    "MicrosoftLearning/PL-300-Microsoft-Power-BI-Data-Analyst",
+    "MicrosoftLearning/mslearn-sql-developer",
+]
+
+
 @dataclass(frozen=True)
 class Settings:
     mongo_uri: str
@@ -22,7 +39,7 @@ def _parse_tracked_repos(value: str) -> list[str]:
 def load_settings() -> Settings:
     load_dotenv()
     repos = _parse_tracked_repos(
-        os.getenv("TRACKED_REPOS", "MicrosoftLearning/mslearn-ai-language")
+        os.getenv("TRACKED_REPOS", ",".join(DEFAULT_TRACKED_REPOS))
     )
     return Settings(
         mongo_uri=os.getenv("MONGO_URI", "mongodb://localhost:27017"),

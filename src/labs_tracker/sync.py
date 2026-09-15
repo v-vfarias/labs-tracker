@@ -1,7 +1,7 @@
 """GitHub-to-MongoDB synchronization for the simplified local model."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from github import Github
@@ -10,7 +10,6 @@ from .config import Settings, load_settings
 from .db import ensure_indexes, get_database
 from .models import (
     KIND_ISSUE,
-    KIND_PR,
     ISSUE_TYPE_VALUES,
     RESOLUTION_VALUES,
     STATE_CLOSED,
@@ -18,6 +17,8 @@ from .models import (
     STATUS_VALUES,
     default_issue_manual_fields,
     default_repo_manual_fields,
+    normalize_issue_type,
+    normalize_resolution,
 )
 
 
@@ -56,13 +57,24 @@ def _issue_document(repo_id: str, issue: Any) -> dict:
     return {
         "issueId": f"{repo_id}#{issue.number}",
         "repoId": repo_id,
-        "kind": KIND_PR if issue.pull_request else KIND_ISSUE,
+        "kind": KIND_ISSUE,
         "title": issue.title,
         "state": _state(issue.state),
     }
 
 
-def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> dict:
+def _latest_closed_issues(repo: Any, limit: int) -> list[Any]:
+    issues = []
+    for issue in repo.get_issues(state="closed", sort="updated", direction="desc"):
+        if issue.pull_request:
+            continue
+        issues.append(issue)
+        if len(issues) >= limit:
+            break
+    return issues
+
+
+def sync(settings: Settings | None = None, closed_issue_limit: int = 10, prune: bool = True) -> dict:
     settings = settings or load_settings()
     if not settings.github_token:
         raise RuntimeError("GITHUB_TOKEN is required to sync from GitHub")
@@ -70,15 +82,17 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
     db = get_database(settings)
     ensure_indexes(db)
     github = Github(settings.github_token)
-    since = _now() - timedelta(days=recently_closed_days)
 
     repo_count = 0
     issue_count = 0
+    synced_repo_ids: set[str] = set()
+    synced_issue_ids: set[str] = set()
 
     for repo_name in settings.tracked_repos:
         gh_repo = github.get_repo(repo_name)
         repo_doc = _repo_document(gh_repo)
         repo_id = repo_doc["id"]
+        synced_repo_ids.add(repo_id)
 
         db.repos.update_one(
             {"id": repo_id},
@@ -91,8 +105,8 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
         repo_count += 1
 
         seen_numbers: set[int] = set()
-        issues = list(gh_repo.get_issues(state="open"))
-        issues.extend(gh_repo.get_issues(state="closed", since=since))
+        issues = [issue for issue in gh_repo.get_issues(state="open") if not issue.pull_request]
+        issues.extend(_latest_closed_issues(gh_repo, closed_issue_limit))
 
         for issue in issues:
             if issue.number in seen_numbers:
@@ -100,6 +114,7 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
             seen_numbers.add(issue.number)
             issue_doc = _issue_document(repo_id, issue)
             issue_id = issue_doc["issueId"]
+            synced_issue_ids.add(issue_id)
             db.issues.update_one(
                 {"issueId": issue_id},
                 {
@@ -109,6 +124,10 @@ def sync(settings: Settings | None = None, recently_closed_days: int = 30) -> di
                 upsert=True,
             )
             issue_count += 1
+
+    if prune:
+        db.repos.delete_many({"id": {"$nin": list(synced_repo_ids)}})
+        db.issues.delete_many({"$or": [{"repoId": {"$nin": list(synced_repo_ids)}}, {"kind": {"$ne": KIND_ISSUE}}, {"issueId": {"$nin": list(synced_issue_ids)}}]})
 
     return {"success": True, "repoCount": repo_count, "issueCount": issue_count}
 
@@ -144,8 +163,15 @@ def simplify_collections(settings: Settings | None = None, confirm: bool = False
     if normalized_repos:
         repo_ids = list(normalized_repos.keys())
         for repo_id, repo_doc in normalized_repos.items():
-            db.repos.replace_one({"_id": repo_id}, repo_doc, upsert=True)
-        db.repos.delete_many({"_id": {"$nin": repo_ids}})
+            db.repos.update_one(
+                {"id": repo_id},
+                {
+                    "$set": {key: value for key, value in repo_doc.items() if key != "_id"},
+                    "$setOnInsert": {"_id": repo_id},
+                },
+                upsert=True,
+            )
+        db.repos.delete_many({"id": {"$nin": repo_ids}})
 
     source_issues = []
     if "items" in collection_names and db.items.count_documents({}) > 0:
@@ -162,24 +188,35 @@ def simplify_collections(settings: Settings | None = None, confirm: bool = False
         state = _state(issue.get("state"))
         manual = default_issue_manual_fields(state)
 
+        if kind == "pr":
+            continue
+
         normalized_issues[issue_id] = {
             "_id": issue_id,
             "issueId": issue_id,
             "repoId": repo_id,
-            "kind": KIND_PR if kind == "pr" else KIND_ISSUE,
+            "kind": KIND_ISSUE,
             "title": issue.get("title") or "",
             "state": state,
-            "typeOfIssue": _enum(issue.get("typeOfIssue"), ISSUE_TYPE_VALUES, manual["typeOfIssue"]),
-            "resolution": _enum(issue.get("resolution"), RESOLUTION_VALUES, manual["resolution"]),
+            "typeOfIssue": normalize_issue_type(issue.get("typeOfIssue") or manual["typeOfIssue"]),
+            "resolution": normalize_resolution(issue.get("resolution") or manual["resolution"]),
             "status": _enum(issue.get("status"), STATUS_VALUES, manual["status"]),
             "lastTested": _github_dt(issue.get("lastTested")),
+            "closingPrUrl": issue.get("closingPrUrl") or manual["closingPrUrl"],
         }
 
     if normalized_issues:
         issue_ids = list(normalized_issues.keys())
         for issue_id, issue_doc in normalized_issues.items():
-            db.issues.replace_one({"_id": issue_id}, issue_doc, upsert=True)
-        db.issues.delete_many({"_id": {"$nin": issue_ids}})
+            db.issues.update_one(
+                {"issueId": issue_id},
+                {
+                    "$set": {key: value for key, value in issue_doc.items() if key != "_id"},
+                    "$setOnInsert": {"_id": issue_id},
+                },
+                upsert=True,
+            )
+        db.issues.delete_many({"issueId": {"$nin": issue_ids}})
 
     if "items" in collection_names:
         db.items.drop()
