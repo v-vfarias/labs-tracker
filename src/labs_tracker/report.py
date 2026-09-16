@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import Counter
 
 import pandas as pd
 
 from .models import KIND_ISSUE, KIND_PR, STATE_OPEN, normalize_issue_type, normalize_resolution
 from .tasks import generate_tasks
+
+
+REPORT_FILTER_KEYS = {"repoId", "state", "status", "typeOfIssue"}
 
 
 def _records(cursor) -> list[dict]:
@@ -55,6 +59,61 @@ def _format_cell(value) -> str:
     elif pd.isna(value):
         return ""
     return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _issue_query(filters: dict | None = None) -> dict:
+    query = {"kind": KIND_ISSUE}
+    filters = filters or {}
+    for key in REPORT_FILTER_KEYS:
+        value = filters.get(key)
+        if value and value != "All":
+            query[key] = value
+    return query
+
+
+def _issue_url(issue_id: str | None) -> str:
+    if not issue_id or "#" not in issue_id:
+        return ""
+    repo_id, number = issue_id.rsplit("#", 1)
+    return f"https://github.com/{repo_id}/issues/{number}" if repo_id and number else ""
+
+
+def _count_rows(values) -> list[dict[str, int | str]]:
+    return [
+        {"label": label, "count": count}
+        for label, count in Counter(value or "Unknown" for value in values).most_common()
+    ]
+
+
+def build_issue_report(db, filters: dict | None = None) -> dict:
+    rows = []
+    for doc in db.issues.find(_issue_query(filters)).sort("issueId", 1):
+        issue_id = doc.get("issueId")
+        rows.append(
+            {
+                "issueId": issue_id,
+                "repoId": doc.get("repoId") or "Unknown",
+                "title": doc.get("title") or "Untitled issue",
+                "state": doc.get("state") or "Unknown",
+                "status": doc.get("status") or "Unknown",
+                "typeOfIssue": normalize_issue_type(doc.get("typeOfIssue")),
+                "resolution": normalize_resolution(doc.get("resolution")),
+                "issueUrl": _issue_url(issue_id),
+            }
+        )
+
+    return {
+        "generatedAt": datetime.now(timezone.utc),
+        "filters": {key: (filters or {}).get(key, "All") for key in sorted(REPORT_FILTER_KEYS)},
+        "total": len(rows),
+        "open": sum(1 for row in rows if row["state"] == STATE_OPEN),
+        "closed": sum(1 for row in rows if row["state"] != STATE_OPEN),
+        "byType": _count_rows(row["typeOfIssue"] for row in rows),
+        "byResolution": _count_rows(row["resolution"] for row in rows),
+        "byStatus": _count_rows(row["status"] for row in rows),
+        "byRepo": _count_rows(row["repoId"] for row in rows),
+        "rows": rows,
+    }
 
 
 def generate_report(db, output_dir: str | Path = "reports") -> Path:

@@ -3,16 +3,22 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from labs_tracker.models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATUS_VALUES, default_issue_manual_fields, default_repo_manual_fields
+from labs_tracker.report import build_issue_report
 from labs_tracker.sync import simplify_collections
 from labs_tracker.tasks import generate_tasks
+
+
+class FakeCursor(list):
+    def sort(self, key, direction=1):
+        return FakeCursor(sorted(self, key=lambda doc: doc.get(key) or ""))
 
 
 class FakeCollection:
     def __init__(self, docs):
         self.docs = list(docs)
 
-    def find(self, query=None):
-        return list(self.docs)
+    def find(self, query=None, projection=None):
+        return FakeCursor([doc for doc in self.docs if self._matches(doc, query or {})])
 
     def find_one(self, query):
         for doc in self.docs:
@@ -21,7 +27,19 @@ class FakeCollection:
         return None
 
     def count_documents(self, query=None):
-        return len(self.docs)
+        return len([doc for doc in self.docs if self._matches(doc, query or {})])
+
+    def _matches(self, doc, query):
+        for key, expected in query.items():
+            actual = doc.get(key)
+            if isinstance(expected, dict):
+                if "$in" in expected and actual not in expected["$in"]:
+                    return False
+                if "$nin" in expected and actual in expected["$nin"]:
+                    return False
+            elif actual != expected:
+                return False
+        return True
 
     def delete_many(self, query=None):
         if not query:
@@ -229,6 +247,50 @@ class ModelTaskTests(unittest.TestCase):
     def test_simplify_requires_confirm_flag(self):
         with self.assertRaises(RuntimeError):
             simplify_collections(settings=object(), confirm=False)
+
+    def test_issue_report_filters_classified_issues(self):
+        db = FakeDb(
+            repos=[],
+            issues=[
+                {
+                    "issueId": "owner/repo#1",
+                    "repoId": "owner/repo",
+                    "kind": "Issue",
+                    "title": "Open UI issue",
+                    "state": "Open",
+                    "typeOfIssue": "UI drift",
+                    "resolution": "Not applicable",
+                    "status": "In review",
+                },
+                {
+                    "issueId": "owner/repo#2",
+                    "repoId": "owner/repo",
+                    "kind": "Issue",
+                    "title": "Closed setup issue",
+                    "state": "Closed",
+                    "typeOfIssue": "Support reproduction/setup",
+                    "resolution": "Updated code/sample",
+                    "status": "Closed",
+                },
+                {
+                    "issueId": "owner/repo#3",
+                    "repoId": "owner/repo",
+                    "kind": "PR",
+                    "title": "PR should not be in issue report",
+                    "state": "Open",
+                    "typeOfIssue": "UI drift",
+                    "resolution": "Unknown",
+                    "status": "In review",
+                },
+            ],
+        )
+
+        report = build_issue_report(db, {"state": "Open", "repoId": "All", "status": "All", "typeOfIssue": "All"})
+
+        self.assertEqual(report["total"], 1)
+        self.assertEqual(report["open"], 1)
+        self.assertEqual(report["closed"], 0)
+        self.assertEqual(report["byType"], [{"label": "UI drift", "count": 1}])
 
 
 if __name__ == "__main__":

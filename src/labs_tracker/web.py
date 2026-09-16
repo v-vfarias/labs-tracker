@@ -8,6 +8,7 @@ from nicegui import run as nicegui_run, ui
 from .config import load_settings
 from .db import ensure_indexes, get_database
 from .models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, KIND_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATE_VALUES, STATUS_VALUES, normalize_issue_type, normalize_resolution
+from .report import build_issue_report
 from .sync import sync
 
 
@@ -205,6 +206,35 @@ def _needs_classification_query() -> dict:
     return {"$or": [{"typeOfIssue": _issue_type_query("Unknown")}, {"resolution": _resolution_query("Unknown")}]} 
 
 
+def _chart_options(title: str, rows: list[dict], *, chart_type: str = "bar") -> dict:
+    labels = [str(row.get("label", "Unknown")) for row in rows[:8]]
+    values = [int(row.get("count", 0)) for row in rows[:8]]
+    if chart_type == "donut":
+        return {
+            "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14, "fontWeight": 700, "color": "#183642"}},
+            "tooltip": {"trigger": "item"},
+            "legend": {"bottom": 0, "type": "scroll"},
+            "series": [
+                {
+                    "type": "pie",
+                    "radius": ["44%", "68%"],
+                    "center": ["50%", "46%"],
+                    "avoidLabelOverlap": True,
+                    "itemStyle": {"borderRadius": 6, "borderColor": "#fffdf8", "borderWidth": 2},
+                    "data": [{"name": label, "value": value} for label, value in zip(labels, values, strict=False)],
+                }
+            ],
+        }
+    return {
+        "title": {"text": title, "left": 8, "textStyle": {"fontSize": 14, "fontWeight": 700, "color": "#183642"}},
+        "tooltip": {"trigger": "axis"},
+        "grid": {"left": 44, "right": 18, "top": 54, "bottom": 72},
+        "xAxis": {"type": "category", "data": labels, "axisLabel": {"interval": 0, "rotate": 28, "fontSize": 10}},
+        "yAxis": {"type": "value", "minInterval": 1},
+        "series": [{"type": "bar", "data": values, "barMaxWidth": 34, "itemStyle": {"color": "#0f766e", "borderRadius": [6, 6, 0, 0]}}],
+    }
+
+
 def _apply_theme():
     ui.add_head_html(
         """
@@ -304,6 +334,28 @@ def _apply_theme():
                 font-weight: 750;
                 line-height: 1.2;
                 margin-top: 2px;
+            }
+
+            .report-metric {
+                min-height: 86px;
+            }
+
+            .report-chart-grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 12px;
+                width: 100%;
+            }
+
+            .report-chart {
+                background: var(--tracker-surface-strong);
+                border: 1px solid var(--tracker-border);
+                border-radius: 8px;
+                box-shadow: 0 18px 42px rgba(39, 49, 58, .08);
+                height: 330px;
+                min-width: 0;
+                overflow: hidden;
+                padding: 8px;
             }
 
             .tracker-title {
@@ -777,11 +829,61 @@ def _apply_theme():
                 .manual-grid {
                     grid-template-columns: 1fr;
                 }
+
+                .report-chart-grid {
+                    grid-template-columns: 1fr;
+                }
             }
 
             @media (max-width: 520px) {
                 .summary-grid {
                     grid-template-columns: 1fr;
+                }
+            }
+
+            @media print {
+                @page {
+                    size: landscape;
+                    margin: 10mm;
+                }
+
+                html,
+                body,
+                .nicegui-content {
+                    background: #f6f2ea !important;
+                    print-color-adjust: exact;
+                    -webkit-print-color-adjust: exact;
+                }
+
+                .tracker-shell {
+                    animation: none !important;
+                    max-width: none;
+                    padding: 0;
+                }
+
+                .dashboard-toolbar,
+                .section-actions,
+                .view-toolbar .q-btn,
+                .q-tooltip,
+                .q-notification {
+                    display: none !important;
+                }
+
+                .tracker-header,
+                .filter-row,
+                .summary-card,
+                .report-chart,
+                .tracker-table {
+                    break-inside: avoid;
+                    box-shadow: none !important;
+                }
+
+                .report-chart-grid {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+
+                .report-chart {
+                    height: 270px;
                 }
             }
         </style>
@@ -827,6 +929,8 @@ def _build_ui():
             with ui.row().classes("dashboard-toolbar"):
                 sync_button = ui.button(icon="sync").props("flat round dense")
                 sync_button.tooltip("Sync issues")
+                report_button = ui.button(icon="analytics").props("flat round dense")
+                report_button.tooltip("Open issue report")
                 refresh_repo_button = ui.button(icon="refresh").props("flat round dense")
                 refresh_repo_button.tooltip("Refresh dashboard")
                 new_repo_button = ui.button(icon="add").props("flat round dense")
@@ -937,6 +1041,58 @@ def _build_ui():
             )
         issues_panel.visible = False
 
+        with ui.column().classes("w-full gap-4") as report_panel:
+            with ui.row().classes("section-header"):
+                with ui.row().classes("view-toolbar"):
+                    report_back_button = ui.button(icon="arrow_back").props("flat round dense")
+                    report_back_button.tooltip("Back to dashboard")
+                    with ui.column().classes("gap-1"):
+                        ui.label("Issue report").classes("section-heading")
+                        ui.label("A compact view of classification, resolution, and workflow patterns across the selected issues.").classes("section-hint")
+                with ui.row().classes("section-actions"):
+                    report_pdf_button = ui.button(icon="picture_as_pdf").props("flat round dense")
+                    report_pdf_button.tooltip("Print or save as PDF")
+                    report_refresh_button = ui.button(icon="refresh").props("flat round dense")
+                    report_refresh_button.tooltip("Refresh report")
+
+            with ui.row().classes("filter-row"):
+                report_repo_filter = ui.select(["All"], value="All", label="Repo").classes("repo-filter")
+                report_state_filter = ui.select(["All", *STATE_VALUES], value="All", label="State").classes("filter-select")
+                report_type_filter = ui.select(["All", *ISSUE_TYPE_VALUES], value="All", label="Issue type").classes("filter-select")
+                report_status_filter = ui.select(["All", *STATUS_VALUES], value="All", label="Status").classes("filter-select")
+
+            with ui.element("div").classes("summary-grid"):
+                with ui.column().classes("summary-card report-metric"):
+                    ui.label("Total issues").classes("summary-label")
+                    report_total_value = ui.label("0").classes("summary-value")
+                with ui.column().classes("summary-card report-metric"):
+                    ui.label("Open").classes("summary-label")
+                    report_open_value = ui.label("0").classes("summary-value")
+                with ui.column().classes("summary-card report-metric"):
+                    ui.label("Closed").classes("summary-label")
+                    report_closed_value = ui.label("0").classes("summary-value")
+                with ui.column().classes("summary-card report-metric"):
+                    ui.label("Classification types").classes("summary-label")
+                    report_type_count_value = ui.label("0").classes("summary-value")
+
+            with ui.element("div").classes("report-chart-grid"):
+                type_chart = ui.echart(_chart_options("Issue Classification", [])).classes("report-chart")
+                resolution_chart = ui.echart(_chart_options("Resolution", [], chart_type="donut")).classes("report-chart")
+                status_chart = ui.echart(_chart_options("Workflow Status", [])).classes("report-chart")
+                repo_chart = ui.echart(_chart_options("Issues by Repo", [])).classes("report-chart")
+
+            report_summary = ui.label("").classes("section-hint")
+            report_table = ui.table(
+                columns=[
+                    {"name": "label", "label": "Classification", "field": "label", "sortable": True, "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
+                    {"name": "count", "label": "Issues", "field": "count", "sortable": True, "align": "left", "classes": "compact-cell", "headerClasses": "compact-cell"},
+                ],
+                rows=[],
+                row_key="label",
+                pagination=10,
+            ).classes("tracker-table w-full").props("flat bordered")
+        report_panel.visible = False
+
         def refresh_summary():
             repos = list(db.repos.find({}, {"id": 1, "products": 1, "_id": 0}))
             release_notes_to_review = 0
@@ -950,6 +1106,60 @@ def _build_ui():
             release_notes_value.text = str(release_notes_to_review)
             for value in [repos_value, open_issues_value, unknown_issues_value, release_notes_value]:
                 value.update()
+
+        def report_filters() -> dict[str, str]:
+            return {
+                "repoId": report_repo_filter.value or "All",
+                "state": report_state_filter.value or "All",
+                "typeOfIssue": report_type_filter.value or "All",
+                "status": report_status_filter.value or "All",
+            }
+
+        def refresh_report():
+            repo_values = sorted(doc.get("id") for doc in db.repos.find({}, {"id": 1, "_id": 0}) if doc.get("id"))
+            report_repo_filter.options = ["All", *repo_values]
+            report = build_issue_report(db, report_filters())
+            report_total_value.text = str(report["total"])
+            report_open_value.text = str(report["open"])
+            report_closed_value.text = str(report["closed"])
+            report_type_count_value.text = str(len(report["byType"]))
+            for value in [report_total_value, report_open_value, report_closed_value, report_type_count_value]:
+                value.update()
+            for chart, options in [
+                (type_chart, _chart_options("Issue Classification", report["byType"])),
+                (resolution_chart, _chart_options("Resolution", report["byResolution"], chart_type="donut")),
+                (status_chart, _chart_options("Workflow Status", report["byStatus"])),
+                (repo_chart, _chart_options("Issues by Repo", report["byRepo"])),
+            ]:
+                chart.options.clear()
+                chart.options.update(options)
+                chart.update()
+            report_table.rows = report["byType"]
+            report_table.update()
+            report_summary.text = f"Showing {report['total']} issue(s) for the selected parameters. Print or save as PDF uses this same filtered report view."
+            report_summary.update()
+
+        def show_report_page():
+            issue_selected["id"] = None
+            issue_view_mode["missing_classification"] = False
+            dashboard_view.visible = False
+            dashboard_view.update()
+            issues_panel.visible = False
+            issues_panel.update()
+            report_panel.visible = True
+            report_panel.update()
+            refresh_report()
+
+        def back_from_report():
+            report_panel.visible = False
+            report_panel.update()
+            dashboard_view.visible = True
+            dashboard_view.update()
+
+        async def export_report_pdf():
+            refresh_report()
+            ui.notify("Use the print dialog to save this report as PDF", color="info")
+            await ui.run_javascript("setTimeout(() => window.print(), 150)")
 
         def refresh_repos():
             rows = []
@@ -1096,6 +1306,7 @@ def _build_ui():
                 ui.notify(f"Synced {result['repoCount']} repo(s), {result['issueCount']} issue records", color="positive")
                 refresh_repos()
                 refresh_issues()
+                refresh_report()
             finally:
                 sync_state["running"] = False
                 timer = sync_state.get("timer")
@@ -1208,6 +1419,8 @@ def _build_ui():
             issue_view_mode["missing_classification"] = False
             issues_panel.visible = False
             issues_panel.update()
+            report_panel.visible = False
+            report_panel.update()
             dashboard_view.visible = True
             dashboard_view.update()
 
@@ -1387,6 +1600,10 @@ def _build_ui():
 
         sync_button.on_click(run_issue_sync)
         issue_sync_button.on_click(run_issue_sync)
+        report_button.on_click(show_report_page)
+        report_back_button.on_click(back_from_report)
+        report_refresh_button.on_click(refresh_report)
+        report_pdf_button.on_click(export_report_pdf)
         refresh_repo_button.on_click(lambda: (refresh_repos(), refresh_issues()))
         issue_refresh_button.on_click(lambda: refresh_issues())
         new_repo_button.on_click(lambda: open_repo_dialog(None))
@@ -1401,9 +1618,12 @@ def _build_ui():
         issues_table.on("rowClick", lambda e: open_clicked_issue(e.args))
         for control in [repo_filter, state_filter, type_filter, status_filter]:
             control.on("update:model-value", lambda _: refresh_issues())
+        for control in [report_repo_filter, report_state_filter, report_type_filter, report_status_filter]:
+            control.on("update:model-value", lambda _: refresh_report())
 
         refresh_repos()
         refresh_issues()
+        refresh_report()
 
 
 def run(host: str = "127.0.0.1", port: int = 8080):

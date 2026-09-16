@@ -105,6 +105,7 @@ Pages:
 
 1. **Repos**: list/create/delete repos, edit manual repo fields, and sync issue data from GitHub.
 2. **Issues**: list/filter/create/delete issue records and edit manual fields (`typeOfIssue`, `resolution`, `status`, `lastTested`, `closingPrUrl`). Clicking an issue opens a dialog with its GitHub link and manual classification controls.
+3. **Report**: visualize issue classification, resolution, status, and repo distribution with filterable charts. Use the PDF button to open the browser print dialog and save the visible report page as a PDF with the currently selected filters.
 
 ## Sync behavior
 
