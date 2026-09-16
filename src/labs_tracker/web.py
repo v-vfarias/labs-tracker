@@ -7,7 +7,7 @@ from nicegui import run as nicegui_run, ui
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
-from .models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, KIND_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_VALUES, STATE_VALUES, STATUS_VALUES, normalize_issue_type, normalize_resolution
+from .models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, KIND_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATE_VALUES, STATUS_VALUES, normalize_issue_type, normalize_resolution
 from .sync import sync
 
 
@@ -185,8 +185,24 @@ def _table_event_row(args):
     return row if isinstance(row, dict) else {}
 
 
-def _issue_type_query_values(value: str) -> list[str]:
-    return [value, *[legacy for legacy, compact in ISSUE_TYPE_ALIASES.items() if compact == value]]
+def _issue_type_query(value: str) -> dict:
+    if value == "Unknown":
+        known_values = [issue_type for issue_type in ISSUE_TYPE_VALUES if issue_type != "Unknown"]
+        known_values.extend(ISSUE_TYPE_ALIASES)
+        return {"$nin": known_values}
+    return {"$in": [value, *[legacy for legacy, compact in ISSUE_TYPE_ALIASES.items() if compact == value]]}
+
+
+def _resolution_query(value: str) -> dict:
+    if value == "Unknown":
+        known_values = [resolution for resolution in RESOLUTION_VALUES if resolution != "Unknown"]
+        known_values.extend(RESOLUTION_ALIASES)
+        return {"$nin": known_values}
+    return {"$in": [value, *[legacy for legacy, compact in RESOLUTION_ALIASES.items() if compact == value]]}
+
+
+def _needs_classification_query() -> dict:
+    return {"$or": [{"typeOfIssue": _issue_type_query("Unknown")}, {"resolution": _resolution_query("Unknown")}]} 
 
 
 def _apply_theme():
@@ -256,6 +272,15 @@ def _apply_theme():
                 box-shadow: 0 14px 34px rgba(39, 49, 58, .07);
                 padding: 15px 16px;
                 transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+            }
+
+            .summary-card.clickable-summary {
+                cursor: pointer;
+            }
+
+            .summary-card.clickable-summary:focus-within,
+            .summary-card.clickable-summary:hover {
+                background: linear-gradient(180deg, #ffffff, #eef9f5);
             }
 
             .summary-card:hover {
@@ -758,16 +783,17 @@ def _build_ui():
 
         repo_selected: dict[str, str | None] = {"id": None}
         issue_selected: dict[str, str | None] = {"id": None}
+        issue_view_mode: dict[str, bool] = {"missing_classification": False}
 
         with ui.column().classes("w-full gap-4") as dashboard_view:
             with ui.element("div").classes("summary-grid"):
                 with ui.column().classes("summary-card"):
                     ui.label("Tracked repos").classes("summary-label")
                     repos_value = ui.label("0").classes("summary-value")
-                with ui.column().classes("summary-card"):
+                with ui.column().classes("summary-card clickable-summary") as open_issues_card:
                     ui.label("Open issues").classes("summary-label")
                     open_issues_value = ui.label("0").classes("summary-value")
-                with ui.column().classes("summary-card"):
+                with ui.column().classes("summary-card clickable-summary") as unknown_issues_card:
                     ui.label("Needs classification").classes("summary-label")
                     unknown_issues_value = ui.label("0").classes("summary-value")
                 with ui.column().classes("summary-card"):
@@ -901,7 +927,7 @@ def _build_ui():
                     release_notes_to_review += 1
             repos_value.text = str(len(repos))
             open_issues_value.text = str(db.issues.count_documents({"state": "Open"}))
-            unknown_issues_value.text = str(db.issues.count_documents({"$or": [{"typeOfIssue": "Unknown"}, {"resolution": "Unknown"}]}))
+            unknown_issues_value.text = str(db.issues.count_documents(_needs_classification_query()))
             release_notes_value.text = str(release_notes_to_review)
             for value in [repos_value, open_issues_value, unknown_issues_value, release_notes_value]:
                 value.update()
@@ -1032,13 +1058,17 @@ def _build_ui():
             if repo_filter.value and repo_filter.value != "All":
                 query["repoId"] = repo_filter.value
                 issues_heading.text = f"Issues for {_repo_lab_name(repo_filter.value)}"
+            elif issue_view_mode["missing_classification"]:
+                issues_heading.text = "Issues missing classification"
             else:
                 issues_heading.text = "All issues"
             issues_heading.update()
             if state_filter.value and state_filter.value != "All":
                 query["state"] = state_filter.value
             if type_filter.value and type_filter.value != "All":
-                query["typeOfIssue"] = {"$in": _issue_type_query_values(type_filter.value)}
+                query["typeOfIssue"] = _issue_type_query(type_filter.value)
+            elif issue_view_mode["missing_classification"]:
+                query.update(_needs_classification_query())
             if status_filter.value and status_filter.value != "All":
                 query["status"] = status_filter.value
 
@@ -1069,12 +1099,39 @@ def _build_ui():
             issues_table.update()
             refresh_summary()
 
+        def show_all_open_issues():
+            issue_view_mode["missing_classification"] = False
+            issue_selected["id"] = None
+            repo_filter.set_value("All")
+            state_filter.set_value("Open")
+            type_filter.set_value("All")
+            status_filter.set_value("All")
+            dashboard_view.visible = False
+            dashboard_view.update()
+            issues_panel.visible = True
+            issues_panel.update()
+            refresh_issues()
+
+        def show_missing_classification_issues():
+            issue_view_mode["missing_classification"] = True
+            issue_selected["id"] = None
+            repo_filter.set_value("All")
+            state_filter.set_value("All")
+            type_filter.set_value("All")
+            status_filter.set_value("All")
+            dashboard_view.visible = False
+            dashboard_view.update()
+            issues_panel.visible = True
+            issues_panel.update()
+            refresh_issues()
+
         def reveal_repo_issues(args):
             repo_id = repo_id_from_args(args)
             if not repo_id:
                 return
             repo_selected["id"] = repo_id
             issue_selected["id"] = None
+            issue_view_mode["missing_classification"] = False
             repo_filter.set_value(repo_id)
             dashboard_view.visible = False
             dashboard_view.update()
@@ -1084,6 +1141,7 @@ def _build_ui():
 
         def back_to_dashboard():
             issue_selected["id"] = None
+            issue_view_mode["missing_classification"] = False
             issues_panel.visible = False
             issues_panel.update()
             dashboard_view.visible = True
@@ -1269,6 +1327,10 @@ def _build_ui():
         issue_refresh_button.on_click(lambda: refresh_issues())
         new_repo_button.on_click(lambda: open_repo_dialog(None))
         back_button.on_click(back_to_dashboard)
+        open_issues_card.on("click", lambda _: show_all_open_issues())
+        open_issues_card.tooltip("Show all open issues")
+        unknown_issues_card.on("click", lambda _: show_missing_classification_issues())
+        unknown_issues_card.tooltip("Show issues missing classification")
 
         repo_table.on("rowClick", lambda e: open_repo_details(e.args))
         repo_table.on("openIssues", lambda e: reveal_repo_issues(e.args))
