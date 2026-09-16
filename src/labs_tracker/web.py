@@ -386,6 +386,24 @@ def _apply_theme():
                 transform: translateY(-1px);
             }
 
+            .dashboard-toolbar .q-btn.syncing-button,
+            .section-actions .q-btn.syncing-button,
+            .view-toolbar .q-btn.syncing-button {
+                background: #dff4ef;
+                border-color: rgba(15, 118, 110, .42);
+                color: var(--tracker-accent-strong);
+            }
+
+            .syncing-button .q-icon {
+                animation: tracker-spin 1s linear infinite;
+            }
+
+            @keyframes tracker-spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+
             .view-toolbar {
                 align-items: center;
                 gap: 8px;
@@ -784,6 +802,7 @@ def _build_ui():
         repo_selected: dict[str, str | None] = {"id": None}
         issue_selected: dict[str, str | None] = {"id": None}
         issue_view_mode: dict[str, bool] = {"missing_classification": False}
+        sync_state = {"running": False, "dots": 0, "notification": None, "timer": None}
 
         with ui.column().classes("w-full gap-4") as dashboard_view:
             with ui.element("div").classes("summary-grid"):
@@ -1039,10 +1058,55 @@ def _build_ui():
             ui.notify("Repo deleted", color="positive")
 
         async def run_issue_sync():
-            result = await nicegui_run.io_bound(sync)
-            ui.notify(f"Synced {result['repoCount']} repo(s), {result['issueCount']} issue records", color="positive")
-            refresh_repos()
-            refresh_issues()
+            if sync_state["running"]:
+                return
+
+            def set_sync_buttons(running: bool):
+                for button in [sync_button, issue_sync_button]:
+                    if running:
+                        button.disable()
+                        button.classes("syncing-button")
+                    else:
+                        button.enable()
+                        button.classes(remove="syncing-button")
+
+            def update_sync_message():
+                notification = sync_state["notification"]
+                if not sync_state["running"] or notification is None:
+                    return
+                sync_state["dots"] = sync_state["dots"] % 3 + 1
+                notification.message = f"Syncing issues{'.' * sync_state['dots']}"
+                notification.update()
+
+            sync_state["running"] = True
+            sync_state["dots"] = 0
+            set_sync_buttons(True)
+            sync_state["notification"] = ui.notification(
+                "Syncing issues",
+                color="info",
+                spinner=True,
+                timeout=None,
+            )
+            sync_state["timer"] = ui.timer(0.45, update_sync_message)
+            try:
+                result = await nicegui_run.io_bound(sync)
+            except Exception as error:
+                ui.notify(f"Sync failed: {error}", color="negative", multi_line=True)
+            else:
+                ui.notify(f"Synced {result['repoCount']} repo(s), {result['issueCount']} issue records", color="positive")
+                refresh_repos()
+                refresh_issues()
+            finally:
+                sync_state["running"] = False
+                timer = sync_state.get("timer")
+                if timer is not None:
+                    timer.cancel()
+                notification = sync_state.get("notification")
+                if notification is not None:
+                    notification.dismiss()
+                sync_state["timer"] = None
+                sync_state["notification"] = None
+                set_sync_buttons(False)
 
         def repo_id_from_args(args) -> str | None:
             row = args if isinstance(args, dict) else _table_event_row(args)
