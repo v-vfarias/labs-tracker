@@ -4,6 +4,33 @@
 
 Build a daily workflow that watches release notes for the products attached to each lab repo, flags repos that need review, and creates a small actionable task list that balances release-note reviews with issue work.
 
+The first foundation is implemented: every supported product has a configured authoritative source, and a deterministic validator records whether that source is reachable, recognizable, first-party, and current. Impact analysis and task generation remain planned work.
+
+## Implemented Source Assurance
+
+Run source validation from the Repos page fact-check action or with:
+
+```bash
+python -m labs_tracker.cli sources-validate
+```
+
+Results are upserted by product in `sourceValidations` with status, reason, final URL, HTTP status, latest public date, content hash, and check time. Validation establishes document provenance and freshness; it does not claim that a product change affects a lab.
+
+## Implemented Troubleshooting Flow
+
+Issues use a simple evidence-bearing progression:
+
+1. `Raised`
+2. `Investigating`
+3. `In progress`
+4. `Waiting` (when needed)
+5. `Validating`
+6. `Resolved`
+
+Stages can be skipped or revisited, including reopening. Each stage or waiting-detail change needs a progress note; waiting additionally requires a categorized reason with an optional person/team/vendor. Unusual circumstances belong in notes. External reporting is optional and vendor-neutral.
+
+The issue dialog and CLI append timestamped history with evidence snapshots. Reports show observed unresolved hours, waiting time and reasons, stage durations, and latest progress. Timing begins with the first recorded entry, excludes resolved periods, and is not effort or complete issue age. Sync retains history-bearing issues outside its normal window for later analysis, without refreshing their GitHub metadata outside that window.
+
 ## Product Scope
 
 Use broad product buckets so the tracker stays useful without becoming a subproduct taxonomy:
@@ -28,10 +55,10 @@ Add release-note review fields to `repos`:
 
 ```json
 {
-  "releaseReviewStatus": "Healthy | Review needed | Reviewing",
+  "releaseReviewStatus": "Healthy | Review needed ",
   "releaseReviewReason": "Short agent-generated explanation",
   "releaseReviewSource": "Release note title or feed/source name",
-  "releaseReviewUrl": "https://...",
+  "releaseReviewUrl": ["https://...", "..."]
   "releaseReviewFlaggedAt": "datetime",
   "releaseReviewCompletedAt": "datetime"
 }
@@ -108,7 +135,7 @@ Register-ScheduledTask -TaskName "LabsTrackerReleaseScan" -Action $Action -Trigg
 ## Implementation Phases
 
 1. Add repo release-review fields and a `tasks` collection with indexes.
-2. Replace mocked release signals with product source configuration.
+2. Replace mocked release signals with product source configuration. **Complete.**
 3. Add release-note fetchers using RSS or public docs pages where available.
 4. Add deduplication for seen release notes.
 5. Add a local agent/evaluator step that scores release-note relevance against repo metadata.

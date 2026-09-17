@@ -37,6 +37,14 @@ Two primary collections are used:
   "typeOfIssue": "UI drift | Skillable | SDK/code issues | Outdated versions | User intent/setup mismatch | Lab content clarity | Product/service behavior | Enhancement request | Unknown",
   "resolution": "Fixed in lab | Linked PR | Replied/no lab change | Reported externally | Duplicate | Cannot reproduce | Not applicable | Unknown",
   "status": "Closed | In review | Resolved locally | Waiting owner review | Temporary/out of scope | Not applicable | Open",
+  "handlingStage": "Raised | Investigating | In progress | Waiting | Validating | Resolved",
+  "waitingReason": "None | Information needed | External dependency | Review/approval | Capacity/priority | Other",
+  "waitingOn": "",
+  "handlingHistory": [],
+  "reproductionNotes": "",
+  "externalReportUrl": "",
+  "externalResponse": "",
+  "handlingUpdatedAt": "datetime",
   "lastTested": null,
   "closingPrUrl": ""
 }
@@ -80,6 +88,7 @@ pip install -e .
 python -m labs_tracker.cli sync
 python -m labs_tracker.cli simplify --yes
 python -m labs_tracker.cli classify
+python -m labs_tracker.cli sources-validate
 python -m labs_tracker.cli web
 ```
 
@@ -103,9 +112,9 @@ Default URL: `http://127.0.0.1:8080`
 
 Pages:
 
-1. **Repos**: list/create/delete repos, edit manual repo fields, and sync issue data from GitHub.
-2. **Issues**: list/filter/create/delete issue records and edit manual fields (`typeOfIssue`, `resolution`, `status`, `lastTested`, `closingPrUrl`). Clicking an issue opens a dialog with its GitHub link and manual classification controls.
-3. **Report**: visualize issue classification, resolution, status, and repo distribution with filterable charts. Use the PDF button to open the browser print dialog and save the visible report page as a PDF with the currently selected filters.
+1. **Repos**: list/create/delete repos, edit manual repo fields, sync issue data from GitHub, and run authoritative source validation with the fact-check button.
+2. **Issues**: list/filter/create/delete issue records and track general resolution progress with timestamped notes, waiting reasons, investigation evidence, and optional external references.
+3. **Report**: filter classification charts and resolution progress, ordered by observed unresolved hours. Compare waiting time, time by stage, delay reasons, and latest progress; open a row for its history. Use the PDF button to print the filtered report.
 
 ## Sync behavior
 
@@ -114,13 +123,31 @@ Pages:
 - repos: `name`, `status`, `lastUpdated`
 - issues: `kind`, `title`, `state`
 
-Manual fields are preserved across syncs via `$setOnInsert` defaults and user edits. Sync also prunes repos outside `TRACKED_REPOS`, PR records, and stale issue records outside the current open/latest-closed window.
+Manual fields are preserved across syncs via `$setOnInsert` defaults and user edits. Sync prunes repos outside `TRACKED_REPOS` and issue records outside the current window only when they have no progress history. History-bearing issues are retained for reporting, even when their repo is no longer tracked; their GitHub metadata is not refreshed outside the sync window. Explicit issue/repo deletion still removes records and their history.
 
 Repo owners and products are selected from curated lists in the web app instead of typed as free text. Product tracking intentionally uses broad buckets such as `Foundry`, `Foundry SDK`, `Foundry Toolkit for VS Code`, `Azure Machine Learning Studio`, `Microsoft Fabric`, `Power BI`, `Azure SQL`, `GitHub Copilot`, `GitHub Actions`, `GitHub`, and `Azure DevOps`.
 
+## Release-source validation
+
+Repo dialogs include a source URL field for each selected product. URLs are shared across all repos using that product and saved in `productSources`; GitHub sync does not overwrite them. Edits require HTTPS on an allowlisted documentation host. After changing a URL, run the fact-check action again: validation for a different URL is not reused.
+
+The repo table's Sources column and the repo dialog list every associated product's link and validation status. The summary counts validated sources across the entire list, not just the first product. DevOps includes Azure DevOps, GitHub, GitHub Actions, and GitHub Copilot. Source validation is not an assessment of whether a release affects lab instructions.
+
+Foundry defaults to [Microsoft Foundry updates: July and August 2026](https://devblogs.microsoft.com/foundry/whats-new-in-microsoft-foundry-july-august-2026/). As checked on September 17, 2026, the [What's New archive](https://devblogs.microsoft.com/foundry/category/whats-new/) shows monthly roundups with occasional combined months and event editions, not a guaranteed monthly or bimonthly schedule. The July/August author note explains the combined edition as a summer-break catch-up. Slugs mix abbreviated and full month names; discover subsequent posts through the archive or [category RSS feed](https://devblogs.microsoft.com/foundry/category/whats-new/feed/) rather than constructing URLs. The app pins the selected article until it is edited; it does not automatically discover the next roundup.
+
+Each supported product maps to an official Microsoft or GitHub release document in `release_sources.py`. The deterministic validator checks that the document is reachable, stays on an allowlisted first-party host, contains the expected product identity, and exposes recent public release evidence. It stores the final URL, check time, latest public date, HTTP status, reason, and content hash in `sourceValidations`.
+
+Run it from the Repos page with the fact-check button or from the CLI:
+
+```bash
+python -m labs_tracker.cli sources-validate
+```
+
+A successful check proves the configured public document is recognizable and current; it does not yet determine whether a release affects a particular lab.
+
 ## Release-note agent and daily tasks
 
-The next feature phase is planned in [docs/release-note-agent-plan.md](docs/release-note-agent-plan.md). The intended flow is:
+Release-impact analysis is the next phase in [docs/release-note-agent-plan.md](docs/release-note-agent-plan.md). The intended flow is:
 
 - fetch release notes for each repo's selected products
 - flag repos as needing review when a product change may affect labs
@@ -158,6 +185,18 @@ Use `resolution` for the outcome, not the root cause. It is intentionally compac
 - `Duplicate`, `Cannot reproduce`, or `Not applicable` when no repo change is needed.
 
 Use `closingPrUrl` when an issue was closed or addressed through a PR. The Issues table shows a small `PR` button when this field is set.
+
+### Resolution progress
+
+The general flow is `Raised` -> `Investigating` -> `In progress` -> `Waiting` (when needed) -> `Validating` -> `Resolved`. Stages can be skipped, revisited, or reopened. `handlingStage` describes current work; `state` is GitHub-owned, `status` retains local review observations, and `resolution` describes the outcome. A GitHub closure does not silently resolve the local workflow.
+
+Every stage or waiting-detail change requires a short progress note explaining the reason and next action. `Waiting` also requires a reason: information needed, external dependency, review/approval, capacity/priority, or other. Optionally name the person, team, or vendor. Use notes for unusual circumstances, attempted fixes, and case-specific delays instead of adding custom stages. Skillable is just one possible external dependency.
+
+Web and CLI saves append timestamped `handlingHistory` entries with the stage, note, waiting details, and a snapshot of investigation notes and external evidence. Evidence-only edits also append an entry; unchanged saves do not. Earlier entries cannot be edited in the app. This is operational history, not a tamper-proof or actor-attributed audit log.
+
+Timing starts at the first recorded entry, never at a guessed historical date. Reports show observed unresolved hours, waiting hours by reason/person, and elapsed time by stage. Resolved periods are excluded; reopening resumes accumulation. Notes in the same stage do not reset its age. Missing history produces blank timing, not zero. These are calendar elapsed hours, not effort, SLA compliance, or full issue age. CSV includes the history and metrics; Markdown lists the 20 longest observed records. Historical reasons and notes remain in the issue timeline even after resolution.
+
+Legacy vendor-specific stages are mapped to general stages when displayed or normalized. Existing evidence is retained; starting history does not backdate it.
 
 ## Migrating old complex documents
 

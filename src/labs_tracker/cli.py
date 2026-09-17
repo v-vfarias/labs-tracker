@@ -8,7 +8,9 @@ from rich.console import Console
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
-from .models import ISSUE_TYPE_VALUES, RESOLUTION_VALUES, STATUS_VALUES, normalize_issue_type, normalize_resolution
+from .models import HANDLING_STAGE_VALUES, ISSUE_TYPE_VALUES, RESOLUTION_VALUES, STATUS_VALUES, WAIT_REASON_VALUES, normalize_issue_type, normalize_resolution
+from .workflow import handling_stage as current_handling_stage, progress_update, waiting_details
+from .release_sources import validate_all_sources
 from .sync import simplify_collections, sync as run_sync
 
 app = typer.Typer(help="Local GitHub lab issue validation tracker.")
@@ -74,24 +76,40 @@ def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested i
     type_of_issue = _choose("Type of issue", ISSUE_TYPE_VALUES, normalize_issue_type(item.get("typeOfIssue")))
     resolution = _choose("Resolution", RESOLUTION_VALUES, normalize_resolution(item.get("resolution")))
     status = _choose("Manual status", STATUS_VALUES, item.get("status", "Open"))
+    handling_stage = _choose("Handling stage", HANDLING_STAGE_VALUES, current_handling_stage(item))
+    reason, waiting_on = waiting_details(item)
+    if handling_stage == "Waiting":
+        reason = _choose("Waiting reason", WAIT_REASON_VALUES[1:], reason if reason != "None" else "Other")
+        waiting_on = typer.prompt("Waiting on (person/team/vendor)", default=waiting_on)
+    note = typer.prompt("Progress note / next action", default="")
+    try:
+        update = progress_update(item, handling_stage, note, reason, waiting_on)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     default_last_tested = date.today().isoformat() if item.get("lastTested") is None else ""
     last_tested_input = typer.prompt("Last tested date (YYYY-MM-DD, blank to keep empty)", default=default_last_tested)
     last_tested = None
     if last_tested_input.strip():
         last_tested = datetime.fromisoformat(last_tested_input.strip()).replace(tzinfo=timezone.utc)
 
-    db.issues.update_one(
-        {"issueId": item["issueId"]},
-        {
-            "$set": {
+    update["$set"].update({
                 "typeOfIssue": normalize_issue_type(type_of_issue),
                 "resolution": normalize_resolution(resolution),
                 "status": status,
                 "lastTested": last_tested,
-            }
-        },
-    )
+    })
+    db.issues.update_one({"issueId": item["issueId"]}, update)
     console.print(f"Updated {item['issueId']}.")
+
+
+@app.command("sources-validate")
+def sources_validate():
+    """Validate and record all configured public product sources."""
+    results = validate_all_sources(_db())
+    for result in results:
+        console.print(f"{result['product']}: {result['status']} - {result['reason']}")
+    failed = sum(result["status"] != "Validated" for result in results)
+    console.print(f"Validated {len(results) - failed}/{len(results)} source(s).")
 
 
 @app.command()

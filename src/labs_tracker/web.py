@@ -7,7 +7,9 @@ from nicegui import run as nicegui_run, ui
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
-from .models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, KIND_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATE_VALUES, STATUS_VALUES, normalize_issue_type, normalize_resolution
+from .models import HANDLING_STAGE_VALUES, ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, KIND_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATE_VALUES, STATUS_VALUES, WAIT_REASON_VALUES, normalize_issue_type, normalize_resolution
+from .workflow import handling_stage as current_handling_stage, progress_metrics, progress_update, waiting_details
+from .release_sources import PRODUCT_SOURCES, check_source_url, save_source_urls, source_for_product, source_validation, validate_all_sources
 from .report import build_issue_report
 from .sync import sync
 
@@ -18,7 +20,7 @@ REPO_PRODUCT_DEFAULTS = {
     "MicrosoftLearning/mslearn-ai-language": ["Foundry"],
     "MicrosoftLearning/mslearn-ai-studio": ["Foundry"],
     "MicrosoftLearning/mslearn-ai-vision": ["Foundry"],
-    "MicrosoftLearning/mslearn-devops": ["Azure DevOps", "GitHub", "GitHub Actions"],
+    "MicrosoftLearning/mslearn-devops": ["Azure DevOps", "GitHub", "GitHub Actions", "GitHub Copilot"],
     "MicrosoftLearning/mslearn-genaiops": ["Foundry", "Azure Machine Learning Studio"],
     "MicrosoftLearning/mslearn-mlops": ["Azure Machine Learning Studio"],
     "MicrosoftLearning/mslearn-azure-ai": ["Foundry"],
@@ -36,55 +38,6 @@ LEGACY_PRODUCT_ALIASES = {
     "Azure Machine Learning": "Azure Machine Learning Studio",
     "PowerBI": "Power BI",
 }
-
-MOCK_PRODUCT_UPDATES = {
-    "Foundry": {
-        "source": "Foundry release notes",
-        "url": "https://learn.microsoft.com/azure/ai-foundry/whats-new",
-        "summary": "Agent tooling and model catalog updates may affect setup and screenshots.",
-    },
-    "Azure AI Language": {
-        "source": "Azure AI Language updates",
-        "url": "https://learn.microsoft.com/azure/ai-services/language-service/whats-new",
-        "summary": "Language service API and portal flow changes may require lab step review.",
-    },
-    "Azure AI Vision": {
-        "source": "Azure AI Vision updates",
-        "url": "https://learn.microsoft.com/azure/ai-services/computer-vision/whats-new",
-        "summary": "Vision Studio and SDK updates may affect image analysis exercises.",
-    },
-    "Azure SQL": {
-        "source": "Azure SQL updates",
-        "url": "https://learn.microsoft.com/azure/azure-sql/database/doc-changes-updates-release-notes-whats-new",
-        "summary": "Portal, security, and database management updates may affect SQL labs.",
-    },
-    "Power BI": {
-        "source": "Power BI monthly update",
-        "url": "https://powerbi.microsoft.com/blog/",
-        "summary": "Desktop and service UX updates may change report-building steps.",
-    },
-    "Microsoft Fabric": {
-        "source": "Fabric updates blog",
-        "url": "https://blog.fabric.microsoft.com/",
-        "summary": "Fabric workload updates may affect analytics and Power BI integrations.",
-    },
-    "Azure Machine Learning Studio": {
-        "source": "Azure Machine Learning release notes",
-        "url": "https://learn.microsoft.com/azure/machine-learning/azure-machine-learning-release-notes",
-        "summary": "CLI, SDK, and studio updates may affect MLOps workflow labs.",
-    },
-    "Azure DevOps": {
-        "source": "Azure DevOps release notes",
-        "url": "https://learn.microsoft.com/azure/devops/release-notes/",
-        "summary": "Pipeline and security updates may affect DevOps lab instructions.",
-    },
-    "Azure AI Document Intelligence": {
-        "source": "Document Intelligence updates",
-        "url": "https://learn.microsoft.com/azure/ai-services/document-intelligence/whats-new",
-        "summary": "Model and API changes may affect information extraction labs.",
-    },
-}
-
 
 def _db():
     db = get_database(load_settings())
@@ -146,15 +99,31 @@ def _repo_products(repo_id: str | None, products: list[str] | None) -> list[str]
     return normalized
 
 
-def _mock_product_signal(products: list[str]) -> dict[str, str]:
-    for product in products:
-        if product in MOCK_PRODUCT_UPDATES:
-            return {**MOCK_PRODUCT_UPDATES[product], "status": "Review"}
+def _product_source_signal(db, products: list[str]) -> dict:
+    sources = []
+    for product in dict.fromkeys(products):
+        source = source_for_product(product, db)
+        if not source:
+            sources.append({"product": product, "source": product, "url": "", "status": "Not configured", "summary": "No source configured"})
+            continue
+        validation = source_validation(db, source)
+        status = validation.get("status", "Not validated")
+        latest = _fmt_table_dt(validation.get("latestPublicDate"))
+        summary = validation.get("reason") or "Run source validation before using this document for release review."
+        if latest:
+            summary = f"{summary}. Latest public date: {latest[:10]}"
+        sources.append({
+            "product": product,
+            "status": status,
+            "source": source["name"],
+            "url": validation.get("finalUrl") or source["url"],
+            "summary": summary,
+        })
+    validated = sum(source["status"] == "Validated" for source in sources)
     return {
-        "status": "Mock needed",
-        "source": "No mocked source",
-        "url": "https://azure.microsoft.com/updates/",
-        "summary": "No product release signal is mocked for this repo yet.",
+        "status": "Validated" if sources and validated == len(sources) else ("Needs attention" if sources else "Not configured"),
+        "sources": sources,
+        "summary": f"{validated} of {len(sources)} sources validated" if sources else "Assign a supported product to this repo.",
     }
 
 
@@ -918,7 +887,7 @@ def _build_ui():
                     ui.label("Needs classification").classes("summary-label")
                     unknown_issues_value = ui.label("0").classes("summary-value")
                 with ui.column().classes("summary-card"):
-                    ui.label("Release notes to review").classes("summary-label")
+                    ui.label("Sources needing validation").classes("summary-label")
                     release_notes_value = ui.label("0").classes("summary-value")
 
             with ui.row().classes("section-header"):
@@ -929,6 +898,8 @@ def _build_ui():
             with ui.row().classes("dashboard-toolbar"):
                 sync_button = ui.button(icon="sync").props("flat round dense")
                 sync_button.tooltip("Sync issues")
+                source_validate_button = ui.button(icon="fact_check").props("flat round dense")
+                source_validate_button.tooltip("Validate release sources")
                 report_button = ui.button(icon="analytics").props("flat round dense")
                 report_button.tooltip("Open issue report")
                 refresh_repo_button = ui.button(icon="refresh").props("flat round dense")
@@ -942,9 +913,9 @@ def _build_ui():
                     {"name": "products", "label": "Products", "field": "products", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
                     {"name": "owners", "label": "Owners", "field": "owners", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
                     {"name": "openIssues", "label": "Open issues", "field": "openIssues", "sortable": True, "align": "left"},
-                    {"name": "releaseStatus", "label": "Signal", "field": "releaseStatus", "sortable": True, "align": "left"},
-                    {"name": "releaseSummary", "label": "Mocked change summary", "field": "releaseSummary", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
-                    {"name": "releaseSource", "label": "Source", "field": "releaseSource", "align": "left"},
+                    {"name": "releaseStatus", "label": "Source status", "field": "releaseStatus", "sortable": True, "align": "left"},
+                    {"name": "releaseSummary", "label": "Validation evidence", "field": "releaseSummary", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
+                    {"name": "releaseSources", "label": "Sources", "field": "releaseSources", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
                 ],
                 rows=[],
                 row_key="id",
@@ -965,16 +936,22 @@ def _build_ui():
                 "body-cell-releaseStatus",
                 """
                 <q-td :props="props">
-                    <q-icon name="warning" color="amber-8" size="18px" />
+                    <q-icon :name="props.row.releaseStatus === 'Validated' ? 'check_circle' : 'warning'"
+                            :color="props.row.releaseStatus === 'Validated' ? 'teal-7' : 'amber-8'" size="18px" />
                     <span class="signal-text">{{ props.row.releaseStatus }}</span>
                 </q-td>
                 """,
             )
             repo_table.add_slot(
-                "body-cell-releaseSource",
+                "body-cell-releaseSources",
                 """
                 <q-td :props="props">
-                    <a :href="props.row.releaseUrl" target="_blank" class="table-link" @click.stop>{{ props.row.releaseSource }}</a>
+                    <div v-for="source in props.row.releaseSources" :key="source.product" class="q-mb-xs">
+                        <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" class="table-link" @click.stop>{{ source.product }}</a>
+                        <span v-else>{{ source.product }}</span>
+                        <span class="issue-meta"> · {{ source.status }}</span>
+                        <q-tooltip>{{ source.summary }}</q-tooltip>
+                    </div>
                 </q-td>
                 """,
             )
@@ -1013,6 +990,9 @@ def _build_ui():
                     {"name": "issueNumber", "label": "#", "field": "issueNumber", "sortable": True, "align": "left", "classes": "issue-id-cell", "headerClasses": "issue-id-cell"},
                     {"name": "lab", "label": "Lab", "field": "lab", "sortable": True, "align": "left", "classes": "lab-cell", "headerClasses": "lab-cell"},
                     {"name": "title", "label": "Title", "field": "title", "sortable": True, "align": "left", "classes": "title-cell", "headerClasses": "title-cell"},
+                    {"name": "handlingStage", "label": "Handling", "field": "handlingStage", "sortable": True, "align": "left", "classes": "medium-cell", "headerClasses": "medium-cell"},
+                    {"name": "stageHours", "label": "Stage hours", "field": "stageHours", "sortable": True, "align": "left"},
+                    {"name": "waitingOn", "label": "Waiting on", "field": "waitingOn", "align": "left", "classes": "wrap-cell"},
                     {"name": "status", "label": "Status", "field": "status", "sortable": True, "align": "left", "classes": "medium-cell", "headerClasses": "medium-cell"},
                     {"name": "typeOfIssue", "label": "Issue type", "field": "typeOfIssue", "sortable": True, "align": "left", "classes": "medium-cell", "headerClasses": "medium-cell"},
                     {"name": "resolution", "label": "Resolution", "field": "resolution", "sortable": True, "align": "left", "classes": "medium-cell", "headerClasses": "medium-cell"},
@@ -1082,6 +1062,19 @@ def _build_ui():
                 repo_chart = ui.echart(_chart_options("Issues by Repo", [])).classes("report-chart")
 
             report_summary = ui.label("").classes("section-hint")
+            ui.label("Resolution progress").classes("section-heading")
+            progress_table = ui.table(
+                columns=[
+                    {"name": field, "label": label, "field": field, "sortable": True, "align": "left", "classes": "wrap-cell"}
+                    for field, label in [
+                        ("issueId", "Issue"), ("handlingStage", "Handling"),
+                        ("trackedSince", "Tracked since (UTC)"), ("observedHours", "Observed hours"),
+                        ("waitingHours", "Waiting hours"), ("stageDurations", "Time by stage"),
+                        ("delayReasons", "Delay reasons"), ("latestProgress", "Latest progress"),
+                    ]
+                ], rows=[], row_key="issueId", pagination=10,
+            ).classes("tracker-table w-full").props("flat bordered")
+            progress_table.tooltip("Elapsed time since first progress entry, excluding resolved periods; not effort or full issue age. Blank times mean no recorded history.")
             report_table = ui.table(
                 columns=[
                     {"name": "label", "label": "Classification", "field": "label", "sortable": True, "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
@@ -1095,15 +1088,18 @@ def _build_ui():
 
         def refresh_summary():
             repos = list(db.repos.find({}, {"id": 1, "products": 1, "_id": 0}))
-            release_notes_to_review = 0
+            products_needing_validation = set()
             for repo in repos:
                 products = _repo_products(repo.get("id"), repo.get("products") or [])
-                if _mock_product_signal(products)["status"] == "Review":
-                    release_notes_to_review += 1
+                for product in products:
+                    source = source_for_product(product, db)
+                    validation = source_validation(db, source) if source else {}
+                    if not validation or validation.get("status") != "Validated":
+                        products_needing_validation.add(product)
             repos_value.text = str(len(repos))
             open_issues_value.text = str(db.issues.count_documents({"state": "Open"}))
             unknown_issues_value.text = str(db.issues.count_documents(_needs_classification_query()))
-            release_notes_value.text = str(release_notes_to_review)
+            release_notes_value.text = str(len(products_needing_validation))
             for value in [repos_value, open_issues_value, unknown_issues_value, release_notes_value]:
                 value.update()
 
@@ -1136,6 +1132,8 @@ def _build_ui():
                 chart.update()
             report_table.rows = report["byType"]
             report_table.update()
+            progress_table.rows = [{**row, "trackedSince": _fmt_table_dt(row["trackedSince"])} for row in report["longestRunning"]]
+            progress_table.update()
             report_summary.text = f"Showing {report['total']} issue(s) for the selected parameters. Print or save as PDF uses this same filtered report view."
             report_summary.update()
 
@@ -1166,7 +1164,7 @@ def _build_ui():
             for doc in db.repos.find({}).sort("id", 1):
                 repo_id = doc.get("id")
                 products = _repo_products(repo_id, doc.get("products") or [])
-                release_signal = _mock_product_signal(products)
+                release_signal = _product_source_signal(db, products)
                 rows.append(
                     {
                         "id": repo_id,
@@ -1177,15 +1175,28 @@ def _build_ui():
                         "repoUrl": _repo_url(repo_id),
                         "releaseStatus": release_signal["status"],
                         "releaseSummary": release_signal["summary"],
-                        "releaseSource": release_signal["source"],
-                        "releaseUrl": release_signal["url"],
+                        "releaseSources": release_signal["sources"],
                     }
                 )
             repo_table.rows = rows
             repo_table.update()
             refresh_summary()
 
-        def save_repo(existing_id: str | None, repo_id: str, name: str, involved_devs, products, last_tested: str) -> bool:
+        def source_url_fields(products_input):
+            inputs = {}
+            originals = {}
+            with ui.column().classes("w-full gap-2"):
+                for product in PRODUCT_SOURCES:
+                    source = source_for_product(product, db)
+                    originals[product] = source["url"]
+                    field = ui.input(f"{product} source URL (shared)", value=source["url"]).classes("w-full").props("type=url")
+                    field.tooltip("Shared by all repos using this product. Save, then run source validation.")
+                    field.bind_visibility_from(products_input, "value", backward=lambda values, product=product: product in (values or []))
+                    inputs[product] = field
+            return lambda: {product: field.value.strip() for product, field in inputs.items()
+                            if product in (products_input.value or []) and field.value.strip() != originals[product]}
+
+        def save_repo(existing_id: str | None, repo_id: str, name: str, involved_devs, products, last_tested: str, source_urls: dict | None = None) -> bool:
             try:
                 parsed_last_tested = _parse_dt(last_tested)
             except ValueError:
@@ -1196,6 +1207,12 @@ def _build_ui():
                 "products": _parse_csv(products),
                 "lastTested": parsed_last_tested,
             }
+            try:
+                for url in (source_urls or {}).values():
+                    check_source_url(url)
+            except ValueError as error:
+                ui.notify(str(error), color="negative")
+                return False
             if existing_id:
                 db.repos.update_one({"id": existing_id}, {"$set": payload})
             else:
@@ -1221,6 +1238,7 @@ def _build_ui():
                     },
                     upsert=True,
                 )
+            save_source_urls(db, source_urls or {})
             refresh_repos()
             ui.notify("Saved", color="positive")
             return True
@@ -1236,6 +1254,7 @@ def _build_ui():
                 repo_name_input = ui.input("Lab name", value=existing.get("name", "")).classes("w-full")
                 involved_input = ui.select(OWNER_VALUES, value=existing.get("involvedDevs") or [], label="Owners", multiple=True).classes("w-full").props("use-chips")
                 products_input = ui.select(PRODUCT_VALUES, value=_repo_products(existing.get("id"), existing.get("products") or []), label="Products", multiple=True).classes("w-full").props("use-chips")
+                edited_sources = source_url_fields(products_input)
                 last_tested_input = ui.input("Last tested", placeholder="ISO datetime or blank", value=_fmt_dt(existing.get("lastTested"))).classes("w-full")
                 if existing_id:
                     repo_id_input.disable()
@@ -1249,6 +1268,7 @@ def _build_ui():
                         involved_input.value,
                         products_input.value,
                         last_tested_input.value,
+                        edited_sources(),
                     ):
                         dialog.close()
 
@@ -1319,6 +1339,24 @@ def _build_ui():
                 sync_state["notification"] = None
                 set_sync_buttons(False)
 
+        async def run_source_validation():
+            source_validate_button.disable()
+            notification = ui.notification("Validating authoritative sources", color="info", spinner=True, timeout=None)
+            try:
+                results = await nicegui_run.io_bound(validate_all_sources, db)
+            except Exception as error:
+                ui.notify(f"Source validation failed: {error}", color="negative", multi_line=True)
+            else:
+                failed = sum(result["status"] != "Validated" for result in results)
+                ui.notify(
+                    f"Validated {len(results) - failed}/{len(results)} product sources",
+                    color="positive" if failed == 0 else "warning",
+                )
+                refresh_repos()
+            finally:
+                notification.dismiss()
+                source_validate_button.enable()
+
         def repo_id_from_args(args) -> str | None:
             row = args if isinstance(args, dict) else _table_event_row(args)
             repo_id = row.get("id") if isinstance(row, dict) else None
@@ -1359,6 +1397,8 @@ def _build_ui():
                         "lab": repo_names.get(repo_id, _repo_lab_name(repo_id)),
                         "title": doc.get("title"),
                         "state": doc.get("state"),
+                        **progress_metrics(doc),
+                        "waitingOn": " / ".join(value for value in waiting_details(doc) if value and value != "None"),
                         "typeOfIssue": normalize_issue_type(doc.get("typeOfIssue")),
                         "resolution": normalize_resolution(doc.get("resolution")),
                         "status": doc.get("status"),
@@ -1447,8 +1487,14 @@ def _build_ui():
                         ui.label("Release signal").classes("summary-label")
                         ui.label(row.get("releaseStatus") or "Unknown").classes("issue-title")
                 ui.label(row.get("releaseSummary") or "No release summary.").classes("section-hint")
-                if row.get("releaseUrl"):
-                    ui.link(row.get("releaseSource") or "Release source", row["releaseUrl"], new_tab=True).classes("external-link")
+                edited_sources = source_url_fields(products_input)
+                for source in row.get("releaseSources", []):
+                    with ui.column().classes("w-full gap-1"):
+                        if source["url"]:
+                            ui.link(source["product"], source["url"], new_tab=True).classes("external-link")
+                        else:
+                            ui.label(source["product"])
+                        ui.label(f"{source['status']}: {source['summary']}").classes("section-hint w-full break-words")
                 if row.get("repoUrl"):
                     ui.link("Open repo in GitHub", row["repoUrl"], new_tab=True).classes("external-link")
 
@@ -1464,6 +1510,7 @@ def _build_ui():
                         owners_input.value,
                         products_input.value,
                         _fmt_dt(existing.get("lastTested")),
+                        edited_sources(),
                     ):
                         dialog.close()
 
@@ -1472,7 +1519,7 @@ def _build_ui():
                     ui.button("Save", icon="save", on_click=save_details_and_close).props("unelevated no-caps").classes("dialog-primary-action")
             dialog.open()
 
-        def save_issue(existing_id: str | None, issue_id: str, repo_id: str, kind: str, title: str, state: str, type_of_issue: str, resolution: str, status: str, last_tested: str, closing_pr_url: str) -> bool:
+        def save_issue(existing_id: str | None, issue_id: str, repo_id: str, kind: str, title: str, state: str, type_of_issue: str, resolution: str, status: str, handling_stage: str, reproduction_notes: str, external_report_url: str, external_response: str, last_tested: str, closing_pr_url: str, progress_note: str, waiting_reason: str, waiting_on: str) -> bool:
             try:
                 parsed_last_tested = _parse_dt(last_tested)
             except ValueError:
@@ -1482,11 +1529,22 @@ def _build_ui():
                 "typeOfIssue": normalize_issue_type(type_of_issue),
                 "resolution": normalize_resolution(resolution),
                 "status": status,
+                "reproductionNotes": reproduction_notes.strip(),
+                "externalReportUrl": external_report_url.strip(),
+                "externalResponse": external_response.strip(),
                 "lastTested": parsed_last_tested,
                 "closingPrUrl": closing_pr_url.strip(),
             }
+            existing = db.issues.find_one({"issueId": existing_id}) if existing_id else {}
+            try:
+                update = progress_update(existing or {}, handling_stage, progress_note, waiting_reason, waiting_on,
+                                         evidence={key: manual[key] for key in ("reproductionNotes", "externalReportUrl", "externalResponse")})
+            except ValueError as error:
+                ui.notify(str(error), color="negative")
+                return False
+            update["$set"].update(manual)
             if existing_id:
-                db.issues.update_one({"issueId": existing_id}, {"$set": manual})
+                db.issues.update_one({"issueId": existing_id}, update)
             else:
                 if not issue_id or not repo_id or not title:
                     ui.notify("issueId, repoId, and title are required", color="negative")
@@ -1494,22 +1552,18 @@ def _build_ui():
                 if db.issues.find_one({"issueId": issue_id}):
                     ui.notify("issue already exists", color="warning")
                     return False
-                db.issues.update_one(
-                    {"issueId": issue_id},
-                    {
-                        "$set": {
-                            "issueId": issue_id,
-                            "repoId": repo_id,
-                            "kind": kind,
-                            "title": title,
-                            "state": state,
-                            **manual,
-                        },
-                        "$setOnInsert": {"_id": issue_id},
-                    },
-                    upsert=True,
-                )
+                update["$set"].update({
+                    "issueId": issue_id,
+                    "repoId": repo_id,
+                    "kind": kind,
+                    "title": title,
+                    "state": state,
+                })
+                update["$setOnInsert"] = {"_id": issue_id}
+                db.issues.update_one({"issueId": issue_id}, update, upsert=True)
             refresh_issues()
+            if report_panel.visible:
+                refresh_report()
             ui.notify("Saved", color="positive")
             return True
 
@@ -1520,6 +1574,31 @@ def _build_ui():
                     ui.label("Issue details" if existing_id else "New issue").classes("section-heading dialog-header-title")
                     close_button = ui.button(icon="close", on_click=dialog.close).props("flat round dense").classes("dialog-close")
                     close_button.tooltip("Close")
+                current_stage = current_handling_stage(existing or {})
+                reason, waiting_on = waiting_details(existing or {})
+                with ui.element("div").classes("manual-grid"):
+                    handling_input = ui.select(HANDLING_STAGE_VALUES, value=current_stage, label="Handling stage").classes("w-full")
+                    progress_note_input = ui.textarea("Progress note / next action", value="").classes("w-full").props("autogrow")
+                    waiting_reason_input = ui.select(WAIT_REASON_VALUES, value=reason, label="Waiting reason").classes("w-full")
+                    waiting_on_input = ui.input("Waiting on (person/team/vendor)", value=waiting_on).classes("w-full")
+                    waiting_reason_input.bind_visibility_from(handling_input, "value", value="Waiting")
+                    waiting_on_input.bind_visibility_from(handling_input, "value", value="Waiting")
+                metrics = progress_metrics(existing or {})
+                if metrics["trackedSince"]:
+                    ui.label(f"Observed: {metrics['observedHours']}h | Waiting: {metrics['waitingHours']}h").classes("issue-meta").tooltip("Elapsed time since first recorded progress, excluding resolved periods; not effort or full issue age.")
+                with ui.expansion("Progress history", icon="history").classes("w-full"):
+                    for event in reversed((existing or {}).get("handlingHistory") or []):
+                        ui.label(f"{_fmt_table_dt(event['at'])} UTC | {event['stage']}").classes("text-weight-medium")
+                        ui.label(event.get("note") or "Tracking started").classes("w-full break-words whitespace-pre-wrap")
+                        if event.get("waitingReason") != "None":
+                            ui.label(f"{event.get('waitingReason', '')} | {event.get('waitingOn', '')}").classes("issue-meta")
+                        if event.get("previousStage"):
+                            ui.label(f"Previous recorded stage: {event['previousStage']}").classes("issue-meta")
+                        with ui.expansion("Evidence", icon="description").classes("w-full"):
+                            for key, label in [("reproductionNotes", "Investigation notes"), ("externalReportUrl", "External reference"), ("externalResponse", "External response")]:
+                                value = event.get("evidence", {}).get(key)
+                                if value:
+                                    ui.label(f"{label}: {value}").classes("w-full break-words whitespace-pre-wrap")
                 if existing_id:
                     ui.label(existing.get("title", "Untitled issue")).classes("issue-title")
                     ui.label(f"{existing.get('state', '')} · {existing_id}").classes("issue-meta")
@@ -1528,10 +1607,15 @@ def _build_ui():
                         ui.link("Open in GitHub", issue_link, new_tab=True).classes("external-link")
                     if existing.get("closingPrUrl"):
                         ui.link("Open closing PR", existing["closingPrUrl"], new_tab=True).classes("external-link")
+                    if existing.get("externalReportUrl"):
+                        ui.link("Open external reference", existing["externalReportUrl"], new_tab=True).classes("external-link")
                     with ui.element("div").classes("manual-grid"):
                         type_input = ui.select(ISSUE_TYPE_VALUES, value=normalize_issue_type(existing.get("typeOfIssue")), label="Issue type").classes("w-full")
                         resolution_input = ui.select(RESOLUTION_VALUES, value=normalize_resolution(existing.get("resolution")), label="Resolution").classes("w-full")
                         status_input = ui.select(STATUS_VALUES, value=existing.get("status", "Open"), label="Status").classes("w-full")
+                        reproduction_input = ui.textarea("Investigation notes", value=existing.get("reproductionNotes") or "").classes("w-full")
+                        external_report_input = ui.input("External reference URL", value=existing.get("externalReportUrl") or "").classes("w-full")
+                        external_response_input = ui.textarea("External response", value=existing.get("externalResponse") or "").classes("w-full")
                         last_tested_input = ui.input("Last tested", placeholder="ISO datetime or blank", value=_fmt_dt(existing.get("lastTested"))).classes("w-full")
                         closing_pr_input = ui.input("Closing PR URL", placeholder="https://github.com/owner/repo/pull/123", value=existing.get("closingPrUrl") or "").classes("w-full")
 
@@ -1546,8 +1630,15 @@ def _build_ui():
                             type_input.value,
                             resolution_input.value,
                             status_input.value,
+                            handling_input.value,
+                            reproduction_input.value,
+                            external_report_input.value,
+                            external_response_input.value,
                             last_tested_input.value,
                             closing_pr_input.value,
+                            progress_note_input.value,
+                            waiting_reason_input.value,
+                            waiting_on_input.value,
                         ):
                             dialog.close()
                 else:
@@ -1559,6 +1650,9 @@ def _build_ui():
                     type_input = ui.select(ISSUE_TYPE_VALUES, value="Unknown", label="Issue type").classes("w-full")
                     resolution_input = ui.select(RESOLUTION_VALUES, value="Unknown", label="Resolution").classes("w-full")
                     status_input = ui.select(STATUS_VALUES, value="Open", label="Status").classes("w-full")
+                    reproduction_input = ui.textarea("Investigation notes", value="").classes("w-full")
+                    external_report_input = ui.input("External reference URL", value="").classes("w-full")
+                    external_response_input = ui.textarea("External response", value="").classes("w-full")
                     last_tested_input = ui.input("Last tested", placeholder="ISO datetime or blank", value="").classes("w-full")
                     closing_pr_input = ui.input("Closing PR URL", placeholder="https://github.com/owner/repo/pull/123", value="").classes("w-full")
 
@@ -1573,8 +1667,15 @@ def _build_ui():
                             type_input.value,
                             resolution_input.value,
                             status_input.value,
+                            handling_input.value,
+                            reproduction_input.value,
+                            external_report_input.value,
+                            external_response_input.value,
                             last_tested_input.value,
                             closing_pr_input.value,
+                            progress_note_input.value,
+                            waiting_reason_input.value,
+                            waiting_on_input.value,
                         ):
                             dialog.close()
 
@@ -1599,6 +1700,7 @@ def _build_ui():
             open_issue_dialog(issue_id)
 
         sync_button.on_click(run_issue_sync)
+        source_validate_button.on_click(run_source_validation)
         issue_sync_button.on_click(run_issue_sync)
         report_button.on_click(show_report_page)
         report_back_button.on_click(back_from_report)
@@ -1616,6 +1718,7 @@ def _build_ui():
         repo_table.on("rowClick", lambda e: open_repo_details(e.args))
         repo_table.on("openIssues", lambda e: reveal_repo_issues(e.args))
         issues_table.on("rowClick", lambda e: open_clicked_issue(e.args))
+        progress_table.on("rowClick", lambda e: open_clicked_issue(e.args))
         for control in [repo_filter, state_filter, type_filter, status_filter]:
             control.on("update:model-value", lambda _: refresh_issues())
         for control in [report_repo_filter, report_state_filter, report_type_filter, report_status_filter]:

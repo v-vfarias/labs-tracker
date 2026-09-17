@@ -8,7 +8,9 @@ from github import Github
 
 from .config import Settings, load_settings
 from .db import ensure_indexes, get_database
+from .workflow import handling_stage, waiting_details
 from .models import (
+    HANDLING_STAGE_VALUES,
     KIND_ISSUE,
     ISSUE_TYPE_VALUES,
     RESOLUTION_VALUES,
@@ -127,7 +129,7 @@ def sync(settings: Settings | None = None, closed_issue_limit: int = 10, prune: 
 
     if prune:
         db.repos.delete_many({"id": {"$nin": list(synced_repo_ids)}})
-        db.issues.delete_many({"$or": [{"repoId": {"$nin": list(synced_repo_ids)}}, {"kind": {"$ne": KIND_ISSUE}}, {"issueId": {"$nin": list(synced_issue_ids)}}]})
+        db.issues.delete_many({"handlingHistory.0": {"$exists": False}, "$or": [{"repoId": {"$nin": list(synced_repo_ids)}}, {"kind": {"$ne": KIND_ISSUE}}, {"issueId": {"$nin": list(synced_issue_ids)}}]})
 
     return {"success": True, "repoCount": repo_count, "issueCount": issue_count}
 
@@ -201,6 +203,14 @@ def simplify_collections(settings: Settings | None = None, confirm: bool = False
             "typeOfIssue": normalize_issue_type(issue.get("typeOfIssue") or manual["typeOfIssue"]),
             "resolution": normalize_resolution(issue.get("resolution") or manual["resolution"]),
             "status": _enum(issue.get("status"), STATUS_VALUES, manual["status"]),
+            "handlingStage": handling_stage({**issue, "state": state}),
+            "handlingHistory": issue.get("handlingHistory") or [],
+            "waitingReason": waiting_details(issue)[0],
+            "waitingOn": waiting_details(issue)[1],
+            "reproductionNotes": issue.get("reproductionNotes") or manual["reproductionNotes"],
+            "externalReportUrl": issue.get("externalReportUrl") or manual["externalReportUrl"],
+            "externalResponse": issue.get("externalResponse") or manual["externalResponse"],
+            "handlingUpdatedAt": _github_dt(issue.get("handlingUpdatedAt")),
             "lastTested": _github_dt(issue.get("lastTested")),
             "closingPrUrl": issue.get("closingPrUrl") or manual["closingPrUrl"],
         }

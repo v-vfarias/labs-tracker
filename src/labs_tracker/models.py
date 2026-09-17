@@ -73,6 +73,17 @@ def normalize_resolution(value: str | None) -> str:
 
 STATUS_VALUES = ["Closed", "In review", "Resolved locally", "Waiting owner review", "Temporary/out of scope", "Not applicable", "Open"]
 
+HANDLING_STAGE_VALUES = [
+    "Raised",
+    "Investigating",
+    "In progress",
+    "Waiting",
+    "Validating",
+    "Resolved",
+]
+
+WAIT_REASON_VALUES = ["None", "Information needed", "External dependency", "Review/approval", "Capacity/priority", "Other"]
+
 OWNER_VALUES = [
     "Graeme Malcolm",
     "Ivor Berry",
@@ -120,6 +131,14 @@ def default_issue_manual_fields(github_state: str | None = None) -> dict:
         "typeOfIssue": "Unknown",
         "resolution": "Unknown",
         "status": status,
+        "handlingStage": "Resolved" if state == "closed" else "Raised",
+        "reproductionNotes": "",
+        "externalReportUrl": "",
+        "externalResponse": "",
+        "handlingUpdatedAt": None,
+        "handlingHistory": [],
+        "waitingReason": "None",
+        "waitingOn": "",
         "lastTested": None,
         "closingPrUrl": "",
     }

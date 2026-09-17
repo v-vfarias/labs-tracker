@@ -9,6 +9,7 @@ import pandas as pd
 
 from .models import KIND_ISSUE, KIND_PR, STATE_OPEN, normalize_issue_type, normalize_resolution
 from .tasks import generate_tasks
+from .workflow import progress_metrics
 
 
 REPORT_FILTER_KEYS = {"repoId", "state", "status", "typeOfIssue"}
@@ -86,6 +87,7 @@ def _count_rows(values) -> list[dict[str, int | str]]:
 
 
 def build_issue_report(db, filters: dict | None = None) -> dict:
+    now = datetime.now(timezone.utc)
     rows = []
     for doc in db.issues.find(_issue_query(filters)).sort("issueId", 1):
         issue_id = doc.get("issueId")
@@ -99,6 +101,7 @@ def build_issue_report(db, filters: dict | None = None) -> dict:
                 "typeOfIssue": normalize_issue_type(doc.get("typeOfIssue")),
                 "resolution": normalize_resolution(doc.get("resolution")),
                 "issueUrl": _issue_url(issue_id),
+                **progress_metrics(doc, now=now),
             }
         )
 
@@ -113,6 +116,7 @@ def build_issue_report(db, filters: dict | None = None) -> dict:
         "byStatus": _count_rows(row["status"] for row in rows),
         "byRepo": _count_rows(row["repoId"] for row in rows),
         "rows": rows,
+        "longestRunning": sorted(rows, key=lambda row: row["observedHours"] if row["observedHours"] is not None else -1, reverse=True),
     }
 
 
@@ -122,6 +126,9 @@ def generate_report(db, output_dir: str | Path = "reports") -> Path:
 
     repos = _records(db.repos.find({}))
     issues = _records(db.issues.find({}))
+    now = datetime.now(timezone.utc)
+    for issue in issues:
+        issue.update(progress_metrics(issue, now=now))
     tasks = generate_tasks(db)
 
     repos_df = pd.DataFrame(repos)
@@ -166,6 +173,12 @@ def generate_report(db, output_dir: str | Path = "reports") -> Path:
         "## Counts by typeOfIssue",
         "",
         _count_table(issues_df, "typeOfIssue"),
+        "",
+        "## Resolution Progress (Longest Observed First)",
+        "",
+        "Observed hours exclude resolved periods. Blank timing means no recorded history; this is elapsed time, not effort or full issue age.",
+        "",
+        _items_table(issues_df.sort_values("observedHours", ascending=False) if not issues_df.empty else issues_df, ["issueId", "handlingStage", "trackedSince", "observedHours", "waitingHours", "stageDurations", "delayReasons", "latestProgress"]),
         "",
         "## Counts by resolution",
         "",
