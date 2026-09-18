@@ -6,48 +6,22 @@ from nicegui import run as nicegui_run, ui
 from .config import load_settings
 from .db import ensure_indexes, get_database
 from .domain.models import HANDLING_STAGE_VALUES, ISSUE_TYPE_VALUES, KIND_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_VALUES, STATE_VALUES, STATUS_VALUES, WAIT_REASON_VALUES, normalize_issue_type, normalize_resolution
-from .domain.workflow import handling_stage as current_handling_stage, progress_metrics, progress_update, waiting_details
-from .integrations.release_sources import PRODUCT_SOURCES, check_source_url, save_source_urls, source_for_product, source_validation, validate_all_sources
+from .domain.workflow import handling_stage as current_handling_stage, progress_metrics, waiting_details
+from .integrations.release_sources import validate_all_sources
+from .services import tracking
+from .services.tracking import DuplicateRecordError, IssueEdit, IssueFilters, RepoEdit, TrackingValidationError
 from .services.reports import build_issue_report
 from .services.sync import sync
 from .domain.products import repo_products as _repo_products
 from .ui.theme import apply_theme as _apply_theme
-from .ui.formatting import _to_dt, _fmt_dt, _fmt_table_dt, _issue_url, _issue_number, _repo_url, _repo_lab_name, _table_event_row
-from .services.tracking import _parse_dt, _parse_csv, _issue_type_query, _resolution_query, _needs_classification_query
+from .ui.formatting import _fmt_dt, _fmt_table_dt, _issue_url, _issue_number, _repo_url, _repo_lab_name, _table_event_row, source_signal
+from .services.tracking import _parse_csv
 
 
 def _db():
     db = get_database(load_settings())
     ensure_indexes(db)
     return db
-
-
-def _product_source_signal(db, products: list[str]) -> dict:
-    sources = []
-    for product in dict.fromkeys(products):
-        source = source_for_product(product, db)
-        if not source:
-            sources.append({"product": product, "source": product, "url": "", "status": "Not configured", "summary": "No source configured"})
-            continue
-        validation = source_validation(db, source)
-        status = validation.get("status", "Not validated")
-        latest = _fmt_table_dt(validation.get("latestPublicDate"))
-        summary = validation.get("reason") or "Run source validation before using this document for release review."
-        if latest:
-            summary = f"{summary}. Latest public date: {latest[:10]}"
-        sources.append({
-            "product": product,
-            "status": status,
-            "source": source["name"],
-            "url": validation.get("finalUrl") or source["url"],
-            "summary": summary,
-        })
-    validated = sum(source["status"] == "Validated" for source in sources)
-    return {
-        "status": "Validated" if sources and validated == len(sources) else ("Needs attention" if sources else "Not configured"),
-        "sources": sources,
-        "summary": f"{validated} of {len(sources)} sources validated" if sources else "Assign a supported product to this repo.",
-    }
 
 
 def _chart_options(title: str, rows: list[dict], *, chart_type: str = "bar") -> dict:
@@ -306,19 +280,11 @@ def _build_ui():
         report_panel.visible = False
 
         def refresh_summary():
-            repos = list(db.repos.find({}, {"id": 1, "products": 1, "_id": 0}))
-            products_needing_validation = set()
-            for repo in repos:
-                products = _repo_products(repo.get("id"), repo.get("products") or [])
-                for product in products:
-                    source = source_for_product(product, db)
-                    validation = source_validation(db, source) if source else {}
-                    if not validation or validation.get("status") != "Validated":
-                        products_needing_validation.add(product)
-            repos_value.text = str(len(repos))
-            open_issues_value.text = str(db.issues.count_documents({"state": "Open"}))
-            unknown_issues_value.text = str(db.issues.count_documents(_needs_classification_query()))
-            release_notes_value.text = str(len(products_needing_validation))
+            counts = tracking.dashboard_counts(db)
+            repos_value.text = str(counts["repos"])
+            open_issues_value.text = str(counts["openIssues"])
+            unknown_issues_value.text = str(counts["missingClassification"])
+            release_notes_value.text = str(counts["sourcesNeedingValidation"])
             for value in [repos_value, open_issues_value, unknown_issues_value, release_notes_value]:
                 value.update()
 
@@ -331,7 +297,7 @@ def _build_ui():
             }
 
         def refresh_report():
-            repo_values = sorted(doc.get("id") for doc in db.repos.find({}, {"id": 1, "_id": 0}) if doc.get("id"))
+            repo_values = sorted(doc.get("id") for doc in tracking.repo_options(db) if doc.get("id"))
             report_repo_filter.options = ["All", *repo_values]
             report = build_issue_report(db, report_filters())
             report_total_value.text = str(report["total"])
@@ -380,17 +346,17 @@ def _build_ui():
 
         def refresh_repos():
             rows = []
-            for doc in db.repos.find({}).sort("id", 1):
+            for doc in tracking.repo_overview(db):
                 repo_id = doc.get("id")
-                products = _repo_products(repo_id, doc.get("products") or [])
-                release_signal = _product_source_signal(db, products)
+                products = doc["products"]
+                release_signal = source_signal(doc["sourceStatuses"])
                 rows.append(
                     {
                         "id": repo_id,
                         "lab": _repo_lab_name(repo_id, doc.get("name")),
                         "products": ", ".join(products),
                         "owners": ", ".join(doc.get("involvedDevs") or []),
-                        "openIssues": db.issues.count_documents({"repoId": repo_id, "state": "Open"}),
+                        "openIssues": doc["openIssues"],
                         "repoUrl": _repo_url(repo_id),
                         "releaseStatus": release_signal["status"],
                         "releaseSummary": release_signal["summary"],
@@ -405,8 +371,7 @@ def _build_ui():
             inputs = {}
             originals = {}
             with ui.column().classes("w-full gap-2"):
-                for product in PRODUCT_SOURCES:
-                    source = source_for_product(product, db)
+                for product, source in tracking.configured_sources(db).items():
                     originals[product] = source["url"]
                     field = ui.input(f"{product} source URL (shared)", value=source["url"]).classes("w-full").props("type=url")
                     field.tooltip("Shared by all repos using this product. Save, then run source validation.")
@@ -415,55 +380,21 @@ def _build_ui():
             return lambda: {product: field.value.strip() for product, field in inputs.items()
                             if product in (products_input.value or []) and field.value.strip() != originals[product]}
 
-        def save_repo(existing_id: str | None, repo_id: str, name: str, involved_devs, products, last_tested: str, source_urls: dict | None = None) -> bool:
+        def save_repo(edit: RepoEdit) -> bool:
             try:
-                parsed_last_tested = _parse_dt(last_tested)
-            except ValueError:
-                ui.notify("Invalid lastTested format. Use ISO datetime.", color="negative")
+                tracking.save_repo(db, edit)
+            except DuplicateRecordError as error:
+                ui.notify(str(error), color="warning")
                 return False
-            payload = {
-                "involvedDevs": _parse_csv(involved_devs),
-                "products": _parse_csv(products),
-                "lastTested": parsed_last_tested,
-            }
-            try:
-                for url in (source_urls or {}).values():
-                    check_source_url(url)
-            except ValueError as error:
+            except TrackingValidationError as error:
                 ui.notify(str(error), color="negative")
                 return False
-            if existing_id:
-                db.repos.update_one({"id": existing_id}, {"$set": payload})
-            else:
-                if not repo_id or not name:
-                    ui.notify("id and name are required", color="negative")
-                    return False
-                if db.repos.find_one({"id": repo_id}):
-                    ui.notify("repo already exists", color="warning")
-                    return False
-                db.repos.update_one(
-                    {"id": repo_id},
-                    {
-                        "$setOnInsert": {
-                            "_id": repo_id,
-                            "id": repo_id,
-                            "name": name,
-                            "status": "Live",
-                            "lastUpdated": None,
-                            "involvedDevs": payload["involvedDevs"],
-                            "products": payload["products"],
-                            "lastTested": payload["lastTested"],
-                        },
-                    },
-                    upsert=True,
-                )
-            save_source_urls(db, source_urls or {})
             refresh_repos()
             ui.notify("Saved", color="positive")
             return True
 
         def open_repo_dialog(existing_id: str | None = None):
-            existing = db.repos.find_one({"id": existing_id}) if existing_id else {}
+            existing = tracking.get_repo(db, existing_id) if existing_id else {}
             with ui.dialog() as dialog, ui.card().classes("dialog-card"):
                 with ui.row().classes("dialog-header"):
                     ui.label("Edit repo" if existing_id else "New repo").classes("section-heading dialog-header-title")
@@ -480,15 +411,15 @@ def _build_ui():
                     repo_name_input.disable()
 
                 def save_and_close():
-                    if save_repo(
-                        existing_id,
-                        repo_id_input.value,
-                        repo_name_input.value,
-                        involved_input.value,
-                        products_input.value,
-                        last_tested_input.value,
-                        edited_sources(),
-                    ):
+                    if save_repo(RepoEdit(
+                        existing_id=existing_id,
+                        repo_id=repo_id_input.value,
+                        name=repo_name_input.value,
+                        involved_devs=involved_input.value,
+                        products=products_input.value,
+                        last_tested=last_tested_input.value,
+                        source_urls=edited_sources(),
+                    )):
                         dialog.close()
 
                 with ui.row().classes("dialog-actions"):
@@ -499,8 +430,7 @@ def _build_ui():
             if not repo_selected["id"]:
                 ui.notify("Select a repo first", color="warning")
                 return
-            db.repos.delete_one({"id": repo_selected["id"]})
-            db.issues.delete_many({"repoId": repo_selected["id"]})
+            tracking.delete_repo(db, repo_selected["id"])
             repo_selected["id"] = None
             refresh_repos()
             refresh_issues()
@@ -582,30 +512,27 @@ def _build_ui():
             return repo_id if isinstance(repo_id, str) else None
 
         def refresh_issues():
-            repo_docs = list(db.repos.find({}, {"id": 1, "name": 1, "_id": 0}))
+            repo_docs = tracking.repo_options(db)
             repo_values = sorted(doc.get("id") for doc in repo_docs if doc.get("id"))
             repo_names = {doc.get("id"): _repo_lab_name(doc.get("id"), doc.get("name")) for doc in repo_docs if doc.get("id")}
             repo_filter.options = ["All", *repo_values]
-            query = {}
             if repo_filter.value and repo_filter.value != "All":
-                query["repoId"] = repo_filter.value
                 issues_heading.text = f"Issues for {_repo_lab_name(repo_filter.value)}"
             elif issue_view_mode["missing_classification"]:
                 issues_heading.text = "Issues missing classification"
             else:
                 issues_heading.text = "All issues"
             issues_heading.update()
-            if state_filter.value and state_filter.value != "All":
-                query["state"] = state_filter.value
-            if type_filter.value and type_filter.value != "All":
-                query["typeOfIssue"] = _issue_type_query(type_filter.value)
-            elif issue_view_mode["missing_classification"]:
-                query.update(_needs_classification_query())
-            if status_filter.value and status_filter.value != "All":
-                query["status"] = status_filter.value
+            filters = IssueFilters(
+                repo_id=repo_filter.value,
+                state=state_filter.value,
+                type_of_issue=type_filter.value,
+                status=status_filter.value,
+                missing_classification=issue_view_mode["missing_classification"],
+            )
 
             rows = []
-            for doc in db.issues.find(query).sort("issueId", 1):
+            for doc in tracking.list_issues(db, filters):
                 issue_id = doc.get("issueId")
                 repo_id = doc.get("repoId")
                 rows.append(
@@ -688,7 +615,7 @@ def _build_ui():
             repo_id = repo_id_from_args(args)
             if not repo_id:
                 return
-            existing = db.repos.find_one({"id": repo_id}) or {}
+            existing = tracking.get_repo(db, repo_id) or {}
             repo_selected["id"] = repo_id
             with ui.dialog() as dialog, ui.card().classes("dialog-card"):
                 with ui.row().classes("dialog-header"):
@@ -722,15 +649,15 @@ def _build_ui():
                     reveal_repo_issues(row)
 
                 def save_details_and_close():
-                    if save_repo(
-                        repo_id,
-                        repo_id,
-                        existing.get("name") or row.get("lab") or _repo_lab_name(repo_id),
-                        owners_input.value,
-                        products_input.value,
-                        _fmt_dt(existing.get("lastTested")),
-                        edited_sources(),
-                    ):
+                    if save_repo(RepoEdit(
+                        existing_id=repo_id,
+                        repo_id=repo_id,
+                        name=existing.get("name") or row.get("lab") or _repo_lab_name(repo_id),
+                        involved_devs=owners_input.value,
+                        products=products_input.value,
+                        last_tested=_fmt_dt(existing.get("lastTested")),
+                        source_urls=edited_sources(),
+                    )):
                         dialog.close()
 
                 with ui.row().classes("dialog-actions"):
@@ -738,48 +665,15 @@ def _build_ui():
                     ui.button("Save", icon="save", on_click=save_details_and_close).props("unelevated no-caps").classes("dialog-primary-action")
             dialog.open()
 
-        def save_issue(existing_id: str | None, issue_id: str, repo_id: str, kind: str, title: str, state: str, type_of_issue: str, resolution: str, status: str, handling_stage: str, reproduction_notes: str, external_report_url: str, external_response: str, last_tested: str, closing_pr_url: str, progress_note: str, waiting_reason: str, waiting_on: str) -> bool:
+        def save_issue(edit: IssueEdit) -> bool:
             try:
-                parsed_last_tested = _parse_dt(last_tested)
-            except ValueError:
-                ui.notify("Invalid lastTested format. Use ISO datetime.", color="negative")
+                tracking.save_issue(db, edit)
+            except DuplicateRecordError as error:
+                ui.notify(str(error), color="warning")
                 return False
-            manual = {
-                "typeOfIssue": normalize_issue_type(type_of_issue),
-                "resolution": normalize_resolution(resolution),
-                "status": status,
-                "reproductionNotes": reproduction_notes.strip(),
-                "externalReportUrl": external_report_url.strip(),
-                "externalResponse": external_response.strip(),
-                "lastTested": parsed_last_tested,
-                "closingPrUrl": closing_pr_url.strip(),
-            }
-            existing = db.issues.find_one({"issueId": existing_id}) if existing_id else {}
-            try:
-                update = progress_update(existing or {}, handling_stage, progress_note, waiting_reason, waiting_on,
-                                         evidence={key: manual[key] for key in ("reproductionNotes", "externalReportUrl", "externalResponse")})
-            except ValueError as error:
+            except TrackingValidationError as error:
                 ui.notify(str(error), color="negative")
                 return False
-            update["$set"].update(manual)
-            if existing_id:
-                db.issues.update_one({"issueId": existing_id}, update)
-            else:
-                if not issue_id or not repo_id or not title:
-                    ui.notify("issueId, repoId, and title are required", color="negative")
-                    return False
-                if db.issues.find_one({"issueId": issue_id}):
-                    ui.notify("issue already exists", color="warning")
-                    return False
-                update["$set"].update({
-                    "issueId": issue_id,
-                    "repoId": repo_id,
-                    "kind": kind,
-                    "title": title,
-                    "state": state,
-                })
-                update["$setOnInsert"] = {"_id": issue_id}
-                db.issues.update_one({"issueId": issue_id}, update, upsert=True)
             refresh_issues()
             if report_panel.visible:
                 refresh_report()
@@ -787,7 +681,7 @@ def _build_ui():
             return True
 
         def open_issue_dialog(existing_id: str | None = None):
-            existing = db.issues.find_one({"issueId": existing_id}) if existing_id else {}
+            existing = tracking.get_issue(db, existing_id) if existing_id else {}
             with ui.dialog() as dialog, ui.card().classes("dialog-card"):
                 with ui.row().classes("dialog-header"):
                     ui.label("Issue details" if existing_id else "New issue").classes("section-heading dialog-header-title")
@@ -839,26 +733,26 @@ def _build_ui():
                         closing_pr_input = ui.input("Closing PR URL", placeholder="https://github.com/owner/repo/pull/123", value=existing.get("closingPrUrl") or "").classes("w-full")
 
                     def save_and_close():
-                        if save_issue(
-                            existing_id,
-                            existing.get("issueId", ""),
-                            existing.get("repoId", ""),
-                            existing.get("kind", KIND_VALUES[0]),
-                            existing.get("title", ""),
-                            existing.get("state", STATE_VALUES[0]),
-                            type_input.value,
-                            resolution_input.value,
-                            status_input.value,
-                            handling_input.value,
-                            reproduction_input.value,
-                            external_report_input.value,
-                            external_response_input.value,
-                            last_tested_input.value,
-                            closing_pr_input.value,
-                            progress_note_input.value,
-                            waiting_reason_input.value,
-                            waiting_on_input.value,
-                        ):
+                        if save_issue(IssueEdit(
+                            existing_id=existing_id,
+                            issue_id=existing.get("issueId", ""),
+                            repo_id=existing.get("repoId", ""),
+                            kind=existing.get("kind", KIND_VALUES[0]),
+                            title=existing.get("title", ""),
+                            state=existing.get("state", STATE_VALUES[0]),
+                            type_of_issue=type_input.value,
+                            resolution=resolution_input.value,
+                            status=status_input.value,
+                            handling_stage=handling_input.value,
+                            reproduction_notes=reproduction_input.value,
+                            external_report_url=external_report_input.value,
+                            external_response=external_response_input.value,
+                            last_tested=last_tested_input.value,
+                            closing_pr_url=closing_pr_input.value,
+                            progress_note=progress_note_input.value,
+                            waiting_reason=waiting_reason_input.value,
+                            waiting_on=waiting_on_input.value,
+                        )):
                             dialog.close()
                 else:
                     issue_id_input = ui.input("Issue id", placeholder="owner/repo#number", value="").classes("w-full")
@@ -876,26 +770,25 @@ def _build_ui():
                     closing_pr_input = ui.input("Closing PR URL", placeholder="https://github.com/owner/repo/pull/123", value="").classes("w-full")
 
                     def save_and_close():
-                        if save_issue(
-                            None,
-                            issue_id_input.value,
-                            repo_id_input.value,
-                            kind_input.value,
-                            title_input.value,
-                            state_input.value,
-                            type_input.value,
-                            resolution_input.value,
-                            status_input.value,
-                            handling_input.value,
-                            reproduction_input.value,
-                            external_report_input.value,
-                            external_response_input.value,
-                            last_tested_input.value,
-                            closing_pr_input.value,
-                            progress_note_input.value,
-                            waiting_reason_input.value,
-                            waiting_on_input.value,
-                        ):
+                        if save_issue(IssueEdit(
+                            issue_id=issue_id_input.value,
+                            repo_id=repo_id_input.value,
+                            kind=kind_input.value,
+                            title=title_input.value,
+                            state=state_input.value,
+                            type_of_issue=type_input.value,
+                            resolution=resolution_input.value,
+                            status=status_input.value,
+                            handling_stage=handling_input.value,
+                            reproduction_notes=reproduction_input.value,
+                            external_report_url=external_report_input.value,
+                            external_response=external_response_input.value,
+                            last_tested=last_tested_input.value,
+                            closing_pr_url=closing_pr_input.value,
+                            progress_note=progress_note_input.value,
+                            waiting_reason=waiting_reason_input.value,
+                            waiting_on=waiting_on_input.value,
+                        )):
                             dialog.close()
 
                 with ui.row().classes("dialog-actions"):
@@ -906,7 +799,7 @@ def _build_ui():
             if not issue_selected["id"]:
                 ui.notify("Select an issue first", color="warning")
                 return
-            db.issues.delete_one({"issueId": issue_selected["id"]})
+            tracking.delete_issue(db, issue_selected["id"])
             issue_selected["id"] = None
             refresh_issues()
             ui.notify("Issue deleted", color="positive")

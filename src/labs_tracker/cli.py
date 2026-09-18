@@ -13,6 +13,7 @@ from .domain.workflow import handling_stage as current_handling_stage, progress_
 from .integrations.release_sources import validate_all_sources
 from .services.maintenance import simplify_collections
 from .services.sync import sync as run_sync
+from .services.tracking import classification_candidates, update_issue
 
 app = typer.Typer(help="Local GitHub lab issue validation tracker.")
 console = Console()
@@ -54,15 +55,7 @@ def simplify(yes: bool = typer.Option(False, "--yes", help="Confirm destructive 
 def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested items to offer.")):
     """Interactively update manual simplified classification fields."""
     db = _db()
-    query = {
-        "state": "Open",
-        "$or": [
-            {"typeOfIssue": "Unknown"},
-            {"resolution": "Unknown"},
-            {"lastTested": None},
-        ],
-    }
-    items = list(db.issues.find(query).sort([("issueId", 1)]).limit(limit))
+    items = classification_candidates(db, limit)
     if not items:
         console.print("No open unknown/untested issue records found.")
         return
@@ -99,7 +92,7 @@ def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested i
                 "status": status,
                 "lastTested": last_tested,
     })
-    db.issues.update_one({"issueId": item["issueId"]}, update)
+    update_issue(db, item["issueId"], update)
     console.print(f"Updated {item['issueId']}.")
 
 

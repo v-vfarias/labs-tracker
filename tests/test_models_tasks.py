@@ -70,7 +70,8 @@ class FakeCollection:
                     existing.setdefault(field, []).append(event)
                 return
         if upsert:
-            doc = dict(update.get("$setOnInsert", {}))
+            doc = {key: value for key, value in query.items() if not key.startswith("$") and not isinstance(value, dict)}
+            doc.update(update.get("$setOnInsert", {}))
             doc.update(update.get("$set", {}))
             for field, event in update.get("$push", {}).items():
                 doc.setdefault(field, []).append(event)

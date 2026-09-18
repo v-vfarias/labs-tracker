@@ -30,24 +30,26 @@ class FakeResponse:
 
 class ReleaseSourceTests(unittest.TestCase):
     def test_repo_lists_all_sources_and_aggregates_validation(self):
-        from labs_tracker.web import _product_source_signal, _repo_products
+        from labs_tracker.domain.products import repo_products
+        from labs_tracker.services.tracking import product_source_statuses
+        from labs_tracker.ui.formatting import source_signal
 
         db = Mock()
         db.productSources.find_one.return_value = None
-        products = _repo_products("MicrosoftLearning/mslearn-devops", [])
+        products = repo_products("MicrosoftLearning/mslearn-devops", [])
         self.assertEqual(set(products), {"Azure DevOps", "GitHub", "GitHub Actions", "GitHub Copilot"})
         db.sourceValidations.find_one.side_effect = lambda query: {"url": PRODUCT_SOURCES[query["product"]]["url"], "status": "Validated"}
-        result = _product_source_signal(db, products)
+        result = source_signal(product_source_statuses(db, products))
         self.assertEqual(result["status"], "Validated")
         self.assertEqual(result["summary"], "4 of 4 sources validated")
         self.assertEqual([source["url"] for source in result["sources"]], [PRODUCT_SOURCES[product]["url"] for product in products])
         db.sourceValidations.find_one.side_effect = lambda query: None if query["product"] == "GitHub Copilot" else {"url": PRODUCT_SOURCES[query["product"]]["url"], "status": "Validated"}
-        result = _product_source_signal(db, products)
+        result = source_signal(product_source_statuses(db, products))
         self.assertEqual(result["status"], "Needs attention")
         self.assertEqual(result["summary"], "3 of 4 sources validated")
         self.assertEqual(len(result["sources"]), 4)
-        self.assertEqual(_product_source_signal(db, ["Unknown"])["sources"][0]["status"], "Not configured")
-        self.assertEqual(_product_source_signal(db, [])["status"], "Not configured")
+        self.assertEqual(source_signal(product_source_statuses(db, ["Unknown"]))["sources"][0]["status"], "Not configured")
+        self.assertEqual(source_signal(product_source_statuses(db, []))["status"], "Not configured")
 
     def test_every_product_has_an_authoritative_source(self):
         self.assertEqual(set(PRODUCT_SOURCES), set(PRODUCT_VALUES))

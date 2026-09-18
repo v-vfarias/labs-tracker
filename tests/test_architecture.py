@@ -73,3 +73,13 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("@media print", css)
         self.assertIn("@media", css)
         self.assertNotIn("<style>", css)
+
+    def test_presentation_does_not_access_database_collections(self):
+        paths = [PACKAGE / "web.py", PACKAGE / "cli.py", *(PACKAGE / "ui").rglob("*.py")]
+        collection_names = {"repos", "issues", "productSources", "sourceValidations"}
+        for path in paths:
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "db":
+                    self.assertNotIn(node.attr, collection_names, f"{path.name}:{node.lineno}")
+                if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == "db":
+                    self.fail(f"Direct database indexing in {path.name}:{node.lineno}")

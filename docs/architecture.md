@@ -16,7 +16,7 @@ src/labs_tracker/
     workflow.py              Progress history rules and elapsed-time metrics
     products.py              Product display defaults and normalization
   services/
-    tracking.py              Tracking input parsing and classification queries
+    tracking.py              Typed edits, CRUD, queries, summaries and source status
     sync.py                  Upserts, sync window and history retention
     maintenance.py           Explicitly confirmed legacy normalization
     tasks.py                 Task generation from database records
@@ -25,7 +25,7 @@ src/labs_tracker/
     github.py                GitHub client creation, fetching and mapping
     release_sources.py       Source catalog, validation and result persistence
   ui/
-    formatting.py            Date, label, link and table-event formatting
+    formatting.py            Date, label, link, table-event and source-status formatting
     theme.py                 Package-resource stylesheet loader
     assets/tracker.css       Screen, responsive and print styling
 ```
@@ -45,8 +45,9 @@ Do not create a `web/` package alongside the existing web entry-point module.
   testable boundaries; no dependency-injection framework is needed.
 - Integrations never import services or presentation. Release-source validation
   retains its existing injected database, HTTP opener and clock parameters.
-- UI code owns widgets, notifications and client-local state. Once the next phase
-  is complete, database reads/writes will reside in services, not UI callbacks.
+- UI code owns widgets, notifications and client-local state. Collection reads and
+  writes reside in services/integrations, not UI or CLI callbacks. Entry points
+  still initialize the database and pass it to those operations.
 - CLI imports do not load NiceGUI. The web command imports the web entry point
   lazily. No import should create connections, perform network I/O or start a server.
 - Split by responsibility, not a strict line-count limit. Avoid generic utility
@@ -71,27 +72,42 @@ These rules are checked in `tests/test_architecture.py` where implemented.
   filters and restrict records to issues. CLI classification has its own eligibility
   query. Consolidating those policies is a separate behavior decision.
 - CLI classification preserves evidence while updating its own field subset.
-  Web editing accepts additional fields; service extraction must preserve both.
+  Web editing accepts additional fields. Both use the tracking service's update
+  persistence; CLI prompting, date parsing and progress-update construction remain
+  separate to preserve their existing order and semantics.
 - Source URL validation checks all proposed values before individual writes; it
   does not provide a multi-document transaction.
 - CSS is included in wheels via setuptools package data and loaded with
   `importlib.resources`, independently of the current working directory.
 
+## Tracking Service Extraction
+
+`RepoEdit` and `IssueEdit` are keyword-only requests for saves. The service retains
+the original validation order, create/edit field allowlists, alias normalization,
+history updates and explicit deletion behavior. It raises `TrackingValidationError`
+for expected input errors and `DuplicateRecordError` for duplicate identifiers.
+UI adapters map those to the existing negative/warning notifications and leave
+dialogs open on failure. Successful saves retain their previous refresh behavior.
+
+`IssueFilters` retains web-specific filter semantics. Dashboard counts, repository
+overviews, record lookup and source-status aggregation are now testable without
+NiceGUI. Services return source metadata and validation records; the UI formats
+their dates and display summaries. Existing databases and schemas are unchanged.
+
+Tests exercise the actual NiceGUI callbacks in isolated client contexts against a
+fake database: repo creation and duplicate handling, validation failures, shared
+source URL editing, issue history/evidence saves and visible-report refresh.
+This does not replace browser rendering or real MongoDB integration tests.
+
 ## Remaining Phases
 
 1. Capture desktop/mobile and print baselines with representative, isolated data.
-   Add characterization tests for web save operations before moving them.
-2. Expand the tracking service to own listing, summary, save/delete and source
-   aggregation operations. Introduce typed edit inputs to replace long positional
-   argument lists. Leave notifications and dialog closure in the UI.
-3. Share update persistence with CLI classification without changing prompts,
-   evidence preservation, update subsets or date semantics.
-4. Add `ui/app.py` for page composition, `ui/state.py` for client-local state and
+2. Add `ui/app.py` for page composition, `ui/state.py` for client-local state and
    `ui/actions.py` for background UI adapters. Keep existing panel navigation.
-5. Extract `ui/dialogs/issues.py`, then `ui/views/report.py`, followed by repo
+3. Extract `ui/dialogs/issues.py`, then `ui/views/report.py`, followed by repo
    dialogs/dashboard and the issue view. Wire explicit callbacks rather than
    importing one view from another. Keep slots beside their owning tables.
-6. Reduce `web.py` to its entry point and verify complete workflows. Preserve the
+4. Reduce `web.py` to its entry point and verify complete workflows. Preserve the
    duplicate-sync guard, timer/notification cleanup, button restoration, in-place
    chart-option updates, and separate state for two browser sessions.
 
@@ -109,9 +125,11 @@ python -m labs_tracker.cli --help
 python -m pip wheel . --no-deps --wheel-dir <temporary-directory>
 ```
 
-The first slice expanded the passing suite from 24 to 41 tests. Checks cover CLI
-contracts, helper/query behavior, progress/history, source validation, exports,
-compatibility imports, package boundaries and stylesheet loading.
+The first slice expanded the passing suite from 24 to 41 tests; tracking extraction
+brings it to 62. Checks cover CLI contracts, helper/query behavior, CRUD validation,
+field ownership, progress/history, source validation, form callbacks, exports,
+compatibility imports, package boundaries and stylesheet loading. Architecture
+checks reject direct collection access in the UI and CLI.
 
 For packaging verification, install the wheel into a temporary location and load
 the CSS from outside the source checkout. Verify the extracted stylesheet and moved

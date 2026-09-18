@@ -55,3 +55,32 @@ def _table_event_row(args):
         row = None
     return row if isinstance(row, dict) else {}
 
+
+def source_signal(statuses: list[dict]) -> dict:
+    sources = []
+    for entry in statuses:
+        product = entry["product"]
+        source = entry["source"]
+        if not source:
+            sources.append({"product": product, "source": product, "url": "", "status": "Not configured", "summary": "No source configured"})
+            continue
+        validation = entry["validation"]
+        status = validation.get("status", "Not validated")
+        latest = _fmt_table_dt(validation.get("latestPublicDate"))
+        summary = validation.get("reason") or "Run source validation before using this document for release review."
+        if latest:
+            summary = f"{summary}. Latest public date: {latest[:10]}"
+        sources.append({
+            "product": product,
+            "status": status,
+            "source": source["name"],
+            "url": validation.get("finalUrl") or source["url"],
+            "summary": summary,
+        })
+    validated = sum(source["status"] == "Validated" for source in sources)
+    return {
+        "status": "Validated" if sources and validated == len(sources) else ("Needs attention" if sources else "Not configured"),
+        "sources": sources,
+        "summary": f"{validated} of {len(sources)} sources validated" if sources else "Assign a supported product to this repo.",
+    }
+
