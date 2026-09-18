@@ -128,13 +128,39 @@ same filtered report before invoking the browser's print dialog.
 The entry point now contains startup code only. No runtime dependencies, CSS,
 database schemas, CLI commands or report formats changed in this phase.
 
+## Persistence and PDF Acceptance
+
+Six opt-in tests in `tests/test_mongo_integration.py` exercise local MongoDB:
+unique indexes, typed saves and validation, history/evidence round trips, report
+queries, shared source overrides, scoped cascade deletion, repeated sync upserts,
+history-aware pruning and persisted source-validation evidence. GitHub and HTTP
+responses are controlled; the database operations and indexes are real.
+
+Each test generates a `labs_tracker_test_<uuid>` database on `127.0.0.1:27017` and
+registers cleanup before creating indexes. Tests never load `.env` or select the
+working database. They are skipped unless explicitly enabled, and fail rather than
+silently skip when enabled without a reachable MongoDB server.
+
+A separate temporary browser harness exercised the actual `web.run` entry point
+with a generated MongoDB database and 24 representative issues. Shared source and
+issue history/evidence saves persisted after page reload. Its background buttons
+were simulated; actual sync persistence is covered by the integration tests.
+
+Chromium generated landscape A4 and Letter PDFs with four pages each and no blank
+pages. Inspection of both text and rendered pages found a **print acceptance
+failure**: the unchanged table widths/scroll containers clip the right-hand
+progress columns (Waiting hours, Time by stage, Delay reasons, Latest progress).
+Only the current ten-row table page is printed, matching existing behavior.
+The PDFs and rendered pages are in the OS temporary directory under
+`labs-tracker-mongo-acceptance`. No stylesheet or report behavior was changed.
+
 ## Remaining Acceptance
 
-1. Exercise startup, edits and sync against a disposable real MongoDB database and
-  controlled GitHub/source responses; current checks use fake databases.
-2. Check native print preview/PDF pagination and a broader set of representative
-  records. Automated browser checks cover print media and invocation, not an
-  interactive operating-system print dialog.
+1. Approve and implement a print-only layout correction, then rerun PDF pagination
+  checks. Decide separately whether printing should include all filtered rows or
+  retain the current table page.
+2. Manually check the native browser/operating-system print dialog. Automated checks
+  cover Chromium PDF generation, not that interactive dialog or printer drivers.
 
 Each extraction requires its focused tests before the next extraction begins.
 No future-feature directories are created until they have an implementation.
@@ -150,8 +176,23 @@ python -m labs_tracker.cli --help
 python -m pip wheel . --no-deps --wheel-dir <temporary-directory>
 ```
 
+To run the MongoDB acceptance tests against an already running local server:
+
+```powershell
+$env:LABS_TRACKER_RUN_MONGO_TESTS = "1"
+try {
+  python -m unittest discover -s tests -p test_mongo_integration.py -v
+} finally {
+  Remove-Item Env:LABS_TRACKER_RUN_MONGO_TESTS
+}
+```
+
+Omit `-p test_mongo_integration.py` to include the regular suite in the enabled run.
+No browser/PDF tooling is required by the committed integration tests.
+
 The first slice expanded the passing suite from 24 to 41 tests; tracking extraction
-brought it to 62 and UI decomposition to 73. Checks cover CLI contracts, helper/query behavior, CRUD validation,
+brought it to 62 and UI decomposition to 73. Persistence acceptance adds six
+opt-in tests, for 79 total when enabled. Checks cover CLI contracts, helper/query behavior, CRUD validation,
 field ownership, progress/history, source validation, form callbacks, exports,
 compatibility imports, package boundaries and stylesheet loading. Architecture
 checks reject direct collection access in the UI and CLI, including `self.db`,
@@ -173,5 +214,6 @@ a local verification run, not a new Playwright dependency or a committed browser
 test suite. Screenshots and harnesses remain in the OS temporary directory.
 
 Use isolated data; never run destructive normalization against the working database
-merely to validate a refactor. Automated tests use mocks/fakes and temporary report
-directories, not live GitHub requests or the working database.
+merely to validate a refactor. Default tests use mocks/fakes and temporary report
+directories; opt-in integration tests use disposable local MongoDB databases.
+Neither suite makes live GitHub requests or accesses the working database.
