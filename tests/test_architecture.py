@@ -4,6 +4,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "labs_tracker"
@@ -75,11 +76,55 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("<style>", css)
 
     def test_presentation_does_not_access_database_collections(self):
+        def is_database(value):
+            return (isinstance(value, ast.Name) and value.id == "db") or (isinstance(value, ast.Attribute) and value.attr == "db")
+
         paths = [PACKAGE / "web.py", PACKAGE / "cli.py", *(PACKAGE / "ui").rglob("*.py")]
         collection_names = {"repos", "issues", "productSources", "sourceValidations"}
         for path in paths:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "db":
+                if isinstance(node, ast.Attribute) and is_database(node.value):
                     self.assertNotIn(node.attr, collection_names, f"{path.name}:{node.lineno}")
-                if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == "db":
+                if isinstance(node, ast.Subscript) and is_database(node.value):
                     self.fail(f"Direct database indexing in {path.name}:{node.lineno}")
+
+    def test_views_and_dialogs_do_not_import_coordinator_or_other_views(self):
+        forbidden = {"labs_tracker.web", "labs_tracker.ui.app", "labs_tracker.ui.actions"}
+        for directory in ("views", "dialogs"):
+            for path in (PACKAGE / "ui" / directory).glob("*.py"):
+                package = f"labs_tracker.ui.{directory}"
+                for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                    if isinstance(node, ast.ImportFrom):
+                        module = importlib.util.resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module
+                        modules = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+                    elif isinstance(node, ast.Import):
+                        modules = [alias.name for alias in node.names]
+                    else:
+                        continue
+                    for module in modules:
+                        self.assertNotIn(module, forbidden, path.name)
+                        self.assertFalse(module == "labs_tracker.ui.views" or module.startswith("labs_tracker.ui.views."), path.name)
+
+    def test_web_entry_point_registers_page_and_initializes_database_lazily(self):
+        from labs_tracker import web
+
+        registered = {}
+
+        def register(route):
+            def decorator(handler):
+                registered[route] = handler
+                return handler
+            return decorator
+
+        db = Mock()
+        with patch.object(web.ui, "page", side_effect=register), patch.object(web.ui, "run") as run, \
+                patch.object(web, "load_settings", return_value="settings"), \
+                patch.object(web, "get_database", return_value=db) as get_database, \
+                patch.object(web, "ensure_indexes") as indexes, patch.object(web, "build_ui") as build:
+            web.run(host="127.0.0.2", port=8091)
+            run.assert_called_once_with(host="127.0.0.2", port=8091, title="Labs Tracker", reload=False)
+            get_database.assert_not_called()
+            registered["/"]()
+            get_database.assert_called_once_with("settings")
+            indexes.assert_called_once_with(db)
+            build.assert_called_once_with(db)

@@ -1,7 +1,8 @@
+import asyncio
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from labs_tracker.domain.workflow import progress_update
 from labs_tracker.services.tracking import (
@@ -180,7 +181,7 @@ class WebTrackingTests(unittest.TestCase):
     def setUp(self):
         from nicegui import Client, ui
         from nicegui.page import page
-        from labs_tracker import web
+        from labs_tracker.ui import app
 
         self.ui = ui
         self.db = FakeDb(
@@ -193,9 +194,8 @@ class WebTrackingTests(unittest.TestCase):
         self.client = Client(page("/tracking-test"), request=None)
         self.addCleanup(self.client.delete)
         self.enterContext(self.client)
-        self.notify = self.enterContext(patch.object(web.ui, "notify"))
-        with patch.object(web, "_db", return_value=self.db):
-            web._build_ui()
+        self.notify = self.enterContext(patch.object(app.ui, "notify"))
+        self.state = app.build_ui(self.db)
 
     def element(self, **props):
         return next(element for element in reversed(list(self.client.elements.values()))
@@ -265,3 +265,147 @@ class WebTrackingTests(unittest.TestCase):
         self.assertEqual(self.db.productSources.find_one({"_id": "Foundry"})["url"], url)
         self.assertEqual(repo_table.rows[0]["releaseSources"][0]["url"], url)
         self.assertFalse(self.dialog().value)
+
+    def test_navigation_resets_classification_mode_and_retains_repo_filters(self):
+        cards = [element for element in self.client.elements.values() if "clickable-summary" in element.classes]
+        issues_panel = self.element(id="issues-panel")
+        repo_filter = next(element for element in issues_panel.descendants() if element._props.get("label") == "Repo")
+        state_filter = next(element for element in issues_panel.descendants() if element._props.get("label") == "State")
+        back = next(element for element in issues_panel.descendants() if element._props.get("icon") == "arrow_back")
+        self.fire(cards[1])
+        self.assertTrue(self.state.missing_classification)
+        self.assertEqual(self.state.active_view, "issues")
+        self.assertEqual(state_filter.value, "All")
+        self.fire(back)
+        self.assertFalse(issues_panel.visible)
+        self.assertFalse(self.state.missing_classification)
+        self.assertEqual(self.state.active_view, "dashboard")
+        self.fire(cards[0])
+        self.assertEqual(state_filter.value, "Open")
+        self.fire(back)
+        repo_table = next(element for element in self.client.elements.values()
+                          if isinstance(element, self.ui.table) and element.row_key == "id")
+        self.fire(repo_table, "openIssues", repo_table.rows[0])
+        self.assertEqual(repo_filter.value, "owner/repo")
+        self.assertEqual(state_filter.value, "Open")
+        self.assertEqual(self.state.repo_id, "owner/repo")
+        self.assertTrue(issues_panel.visible)
+
+    def test_two_clients_keep_selections_filters_and_dialogs_separate(self):
+        from nicegui import Client
+        from nicegui.page import page
+        from labs_tracker.ui.app import build_ui
+
+        second = Client(page("/tracking-second"), request=None)
+        self.addCleanup(second.delete)
+        with second:
+            second_state = build_ui(self.db)
+        second_elements = set(second.elements)
+        self.fire(self.element(icon="analytics"))
+        self.fire(self.element(icon="add"))
+        self.element(label="Lab name").set_value("Only first client")
+        self.assertEqual(self.state.active_view, "report")
+        self.assertEqual(second_state.active_view, "dashboard")
+        self.assertIsNone(second_state.repo_id)
+        self.assertEqual(set(second.elements), second_elements)
+        self.assertFalse(any(isinstance(element, self.ui.dialog) for element in second.elements.values()))
+        first_filter = self.element(label="State")
+        first_filter.set_value("Closed")
+        self.assertTrue(all(element.value == "All" for element in second.elements.values()
+                            if isinstance(element, self.ui.select) and element._props.get("label") == "State"))
+        self.fire(self.element(icon="close"))
+        self.fire(self.element(icon="add"))
+        self.assertEqual(self.element(label="Lab name").value, "")
+
+    def test_report_refresh_mutates_existing_chart_options(self):
+        charts = [element for element in self.client.elements.values() if isinstance(element, self.ui.echart)]
+        options = [chart.options for chart in charts]
+        self.db.issues.docs.append({**self.db.issues.docs[0], "issueId": "owner/repo#2"})
+        self.fire(self.element(icon="analytics"))
+        for chart, original in zip(charts, options):
+            self.assertIs(chart.options, original)
+        self.assertEqual(charts[0].options["series"][0]["data"], [2])
+
+
+class PageActionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from labs_tracker.ui import actions
+
+        self.module = actions
+        self.buttons = [Mock(), Mock()]
+        self.source_button = Mock()
+        self.on_sync = Mock()
+        self.on_sources = Mock()
+        self.db = Mock()
+        self.actions = actions.PageActions(self.db, self.buttons, self.source_button, self.on_sync, self.on_sources)
+        self.io_bound = self.enterContext(patch.object(actions.nicegui_run, "io_bound", new_callable=AsyncMock))
+        self.notify = self.enterContext(patch.object(actions.ui, "notify"))
+        self.notification = self.enterContext(patch.object(actions.ui, "notification")).return_value
+        self.timer_factory = self.enterContext(patch.object(actions.ui, "timer"))
+
+    def assert_sync_cleaned_up(self):
+        self.assertFalse(self.actions.sync_state["running"])
+        self.assertIsNone(self.actions.sync_state["timer"])
+        self.assertIsNone(self.actions.sync_state["notification"])
+        self.timer_factory.return_value.cancel.assert_called_once()
+        self.notification.dismiss.assert_called_once()
+        for button in self.buttons:
+            button.disable.assert_called_once()
+            button.enable.assert_called_once()
+            button.classes.assert_any_call(remove="syncing-button")
+
+    async def test_sync_guard_refresh_and_cleanup(self):
+        async def sync_result(*args):
+            self.assertTrue(self.actions.sync_state["running"])
+            self.timer_factory.call_args.args[1]()
+            self.assertEqual(self.notification.message, "Syncing issues.")
+            await self.actions.run_issue_sync()
+            return {"repoCount": 1, "issueCount": 2}
+
+        self.io_bound.side_effect = sync_result
+        await self.actions.run_issue_sync()
+        self.io_bound.assert_awaited_once_with(self.module.sync)
+        self.on_sync.assert_called_once_with()
+        self.notify.assert_called_once_with("Synced 1 repo(s), 2 issue records", color="positive")
+        self.assert_sync_cleaned_up()
+
+    async def test_sync_failure_restores_controls_without_refreshing(self):
+        self.io_bound.side_effect = RuntimeError("offline")
+        await self.actions.run_issue_sync()
+        self.notify.assert_called_once_with("Sync failed: offline", color="negative", multi_line=True)
+        self.on_sync.assert_not_called()
+        self.assert_sync_cleaned_up()
+
+    async def test_sync_cancellation_still_cleans_up(self):
+        self.io_bound.side_effect = asyncio.CancelledError
+        with self.assertRaises(asyncio.CancelledError):
+            await self.actions.run_issue_sync()
+        self.on_sync.assert_not_called()
+        self.assert_sync_cleaned_up()
+
+    async def test_source_validation_refreshes_and_reports_partial_failure(self):
+        self.io_bound.return_value = [{"status": "Validated"}, {"status": "Failed"}]
+        await self.actions.run_source_validation()
+        self.io_bound.assert_awaited_once_with(self.module.validate_all_sources, self.db)
+        self.notify.assert_called_once_with("Validated 1/2 product sources", color="warning")
+        self.on_sources.assert_called_once_with()
+        self.source_button.disable.assert_called_once()
+        self.source_button.enable.assert_called_once()
+        self.notification.dismiss.assert_called_once()
+
+    async def test_source_validation_failure_restores_button(self):
+        self.io_bound.side_effect = RuntimeError("offline")
+        await self.actions.run_source_validation()
+        self.notify.assert_called_once_with("Source validation failed: offline", color="negative", multi_line=True)
+        self.on_sources.assert_not_called()
+        self.source_button.enable.assert_called_once()
+        self.notification.dismiss.assert_called_once()
+
+    async def test_action_state_is_client_local(self):
+        other = self.module.PageActions(self.db, [Mock()], Mock(), Mock(), Mock())
+        self.actions.sync_state["running"] = True
+        self.io_bound.return_value = {"repoCount": 0, "issueCount": 0}
+        await other.run_issue_sync()
+        self.io_bound.assert_awaited_once()
+        self.assertTrue(self.actions.sync_state["running"])
+        self.assertFalse(other.sync_state["running"])

@@ -8,7 +8,7 @@ This refactor changes code ownership, not features, database schemas or appearan
 ```text
 src/labs_tracker/
   cli.py                     Terminal entry point and prompting
-  web.py                     Existing NiceGUI page composition and callbacks
+  web.py                     NiceGUI startup, route and database initialization
   config.py                  Settings and environment loading
   db.py                      MongoDB connections and indexes
   domain/
@@ -25,8 +25,18 @@ src/labs_tracker/
     github.py                GitHub client creation, fetching and mapping
     release_sources.py       Source catalog, validation and result persistence
   ui/
+    app.py                   Page composition, navigation and cross-view callbacks
+    state.py                 Per-client selections and navigation mode
+    actions.py               Async sync/validation controls and cleanup
     formatting.py            Date, label, link, table-event and source-status formatting
     theme.py                 Package-resource stylesheet loader
+    dialogs/
+      issues.py              Issue editing, evidence and progress history
+      repos.py               Repo editing and shared source URL fields
+    views/
+      dashboard.py           Repo table, source signals and summary counts
+      issues.py              Issue filters, table and refresh behavior
+      report.py              Report filters, tables, charts and print action
     assets/tracker.css       Screen, responsive and print styling
 ```
 
@@ -99,17 +109,32 @@ fake database: repo creation and duplicate handling, validation failures, shared
 source URL editing, issue history/evidence saves and visible-report refresh.
 This does not replace browser rendering or real MongoDB integration tests.
 
-## Remaining Phases
+## UI Decomposition
 
-1. Capture desktop/mobile and print baselines with representative, isolated data.
-2. Add `ui/app.py` for page composition, `ui/state.py` for client-local state and
-   `ui/actions.py` for background UI adapters. Keep existing panel navigation.
-3. Extract `ui/dialogs/issues.py`, then `ui/views/report.py`, followed by repo
-   dialogs/dashboard and the issue view. Wire explicit callbacks rather than
-   importing one view from another. Keep slots beside their owning tables.
-4. Reduce `web.py` to its entry point and verify complete workflows. Preserve the
-   duplicate-sync guard, timer/notification cleanup, button restoration, in-place
-   chart-option updates, and separate state for two browser sessions.
+`web.run(host, port)` registers the page and initializes its database on request.
+`ui.app.build_ui(db)` composes all widgets inside that client's context, wires
+callbacks and returns its `PageState`. No widgets, selections or running-action
+state are shared between clients. Filters remain owned by their respective views.
+
+Each view constructs its own widgets and owns its refresh logic. Vue slots remain
+beside their tables. Views and dialogs never import other views or the coordinator;
+the coordinator wires their controls and passes save/navigation/refresh callbacks.
+Dialogs close only when their save callback succeeds. `PageActions` receives
+buttons and refresh callbacks rather than importing views. Its duplicate-sync
+guard, notification timer, cleanup and button restoration retain existing behavior.
+Report charts continue mutating their options in place, and printing refreshes the
+same filtered report before invoking the browser's print dialog.
+
+The entry point now contains startup code only. No runtime dependencies, CSS,
+database schemas, CLI commands or report formats changed in this phase.
+
+## Remaining Acceptance
+
+1. Exercise startup, edits and sync against a disposable real MongoDB database and
+  controlled GitHub/source responses; current checks use fake databases.
+2. Check native print preview/PDF pagination and a broader set of representative
+  records. Automated browser checks cover print media and invocation, not an
+  interactive operating-system print dialog.
 
 Each extraction requires its focused tests before the next extraction begins.
 No future-feature directories are created until they have an implementation.
@@ -126,18 +151,27 @@ python -m pip wheel . --no-deps --wheel-dir <temporary-directory>
 ```
 
 The first slice expanded the passing suite from 24 to 41 tests; tracking extraction
-brings it to 62. Checks cover CLI contracts, helper/query behavior, CRUD validation,
+brought it to 62 and UI decomposition to 73. Checks cover CLI contracts, helper/query behavior, CRUD validation,
 field ownership, progress/history, source validation, form callbacks, exports,
 compatibility imports, package boundaries and stylesheet loading. Architecture
-checks reject direct collection access in the UI and CLI.
+checks reject direct collection access in the UI and CLI, including `self.db`,
+and imports that couple views to one another or their coordinator. UI tests cover
+navigation/filter behavior, two-client isolation, repeated dialogs, in-place chart
+updates, duplicate sync requests, success/failure/cancellation cleanup and startup.
 
 For packaging verification, install the wheel into a temporary location and load
 the CSS from outside the source checkout. Verify the extracted stylesheet and moved
 function bodies against the pre-refactor version, excluding incidental whitespace.
 
-Browser acceptance remains required before restructuring the UI: dashboard counts,
-repo edits, issue filters/history, source URL changes, report charts and row editing,
-print preview, background success/failure cleanup and two-session isolation.
-Use an isolated test database; never run destructive normalization against the
-working database merely to validate a refactor. Automated tests use mocks/fakes and
-temporary report directories, not live GitHub requests or the working database.
+After extraction, a temporary Playwright harness served both the pre-extraction
+committed UI and the extracted UI with identical isolated fake records. Dashboard,
+issues, report and print-media screenshots matched pixel-for-pixel at 1440x1000
+and 390x844, with rendered charts and no JavaScript page errors. Browser workflows
+also verified source URL saves, stage-change validation, history/evidence editing,
+print invocation and independent navigation in a second browser context. This was
+a local verification run, not a new Playwright dependency or a committed browser
+test suite. Screenshots and harnesses remain in the OS temporary directory.
+
+Use isolated data; never run destructive normalization against the working database
+merely to validate a refactor. Automated tests use mocks/fakes and temporary report
+directories, not live GitHub requests or the working database.

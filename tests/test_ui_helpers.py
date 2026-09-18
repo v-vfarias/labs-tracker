@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from labs_tracker import web
+from labs_tracker.ui.views.report import _chart_options
 from labs_tracker.domain.products import repo_products
 from labs_tracker.services import tracking
 from labs_tracker.services.reports import _issue_query
@@ -67,5 +67,5 @@ class UIHelperTests(unittest.TestCase):
         self.assertIsNone(formatting._issue_url("owner/repo"))
         self.assertEqual(formatting._issue_number("owner/repo#3"), "#3")
         rows = [{"label": str(index), "count": index} for index in range(10)]
-        self.assertEqual(web._chart_options("Title", rows)["series"][0]["data"], list(range(8)))
-        self.assertEqual(web._chart_options("Title", [], chart_type="donut")["series"][0]["data"], [])
+        self.assertEqual(_chart_options("Title", rows)["series"][0]["data"], list(range(8)))
+        self.assertEqual(_chart_options("Title", [], chart_type="donut")["series"][0]["data"], [])
