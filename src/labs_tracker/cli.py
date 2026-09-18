@@ -8,10 +8,11 @@ from rich.console import Console
 
 from .config import load_settings
 from .db import ensure_indexes, get_database
-from .models import HANDLING_STAGE_VALUES, ISSUE_TYPE_VALUES, RESOLUTION_VALUES, STATUS_VALUES, WAIT_REASON_VALUES, normalize_issue_type, normalize_resolution
-from .workflow import handling_stage as current_handling_stage, progress_update, waiting_details
-from .release_sources import validate_all_sources
-from .sync import simplify_collections, sync as run_sync
+from .domain.models import HANDLING_STAGE_VALUES, ISSUE_TYPE_VALUES, RESOLUTION_VALUES, STATUS_VALUES, WAIT_REASON_VALUES, normalize_issue_type, normalize_resolution
+from .domain.workflow import handling_stage as current_handling_stage, progress_update, waiting_details
+from .integrations.release_sources import validate_all_sources
+from .services.maintenance import simplify_collections
+from .services.sync import sync as run_sync
 
 app = typer.Typer(help="Local GitHub lab issue validation tracker.")
 console = Console()

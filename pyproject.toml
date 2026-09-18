@@ -23,3 +23,6 @@ labs-tracker = "labs_tracker.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"labs_tracker.ui" = ["assets/*.css"]

@@ -4,6 +4,11 @@ Local-only pilot for tracking lab repositories and their issues with a simplifie
 
 GitHub is the source of truth for refreshes. MongoDB stores only a small set of synced fields plus manual fields you control.
 
+## Architecture
+
+See [Architecture and refactoring status](docs/architecture.md) for module ownership,
+dependency rules, compatibility guarantees, verification commands and remaining phases.
+
 ## Simplified data model
 
 Two primary collections are used:

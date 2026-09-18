@@ -196,7 +196,7 @@ class ModelTaskTests(unittest.TestCase):
             {"issueId": "owner/repo#2", "repoId": "owner/repo", "kind": "Issue", "handlingHistory": []},
             {"issueId": "owner/repo#3", "repoId": "owner/repo", "kind": "Issue"},
         ])
-        with patch("labs_tracker.sync.get_database", return_value=db), patch("labs_tracker.sync.ensure_indexes"), patch("labs_tracker.sync.Github"):
+        with patch("labs_tracker.services.sync.get_database", return_value=db), patch("labs_tracker.services.sync.ensure_indexes"), patch("labs_tracker.services.sync.get_github"):
             sync(SimpleNamespace(github_token="test", tracked_repos=[]))
         self.assertEqual([issue["issueId"] for issue in db.issues.docs], ["owner/repo#1"])
 
@@ -311,7 +311,7 @@ class ModelTaskTests(unittest.TestCase):
             sync_runs=[{"startedAt": datetime.now(timezone.utc)}],
         )
 
-        with patch("labs_tracker.sync.get_database", return_value=db), patch("labs_tracker.sync.ensure_indexes"):
+        with patch("labs_tracker.services.maintenance.get_database", return_value=db), patch("labs_tracker.services.maintenance.ensure_indexes"):
             result = simplify_collections(settings=object(), confirm=True)
 
         self.assertEqual(result["repos"], 1)
@@ -340,7 +340,7 @@ class ModelTaskTests(unittest.TestCase):
         db = FakeDb([], [issue])
         db.issues.update_one({"issueId": issue["issueId"]}, progress_update(issue, "Waiting", "Awaiting logs", "External dependency", "Skillable", now=datetime(2026, 9, 1, tzinfo=timezone.utc)))
         history = list(issue["handlingHistory"])
-        with patch("labs_tracker.sync.get_database", return_value=db), patch("labs_tracker.sync.ensure_indexes"):
+        with patch("labs_tracker.services.maintenance.get_database", return_value=db), patch("labs_tracker.services.maintenance.ensure_indexes"):
             simplify_collections(settings=object(), confirm=True)
         self.assertEqual(db.issues.docs[0]["handlingHistory"], history)
         report = build_issue_report(db)
