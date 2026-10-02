@@ -1,8 +1,58 @@
 # Suggested Daily Tasks and Weekly Work Log
 
-Status: feature specification / prototype proposal, updated 2026-10-02.
-This extends the existing release-note agent plan; it is not a claim that the
-planned features below are implemented.
+Status: minimal manual prototype implemented, updated 2026-10-02.
+This extends the existing release-note agent plan. The implemented slice below
+is distinct from the broader target design and future automation.
+
+## Implemented Prototype
+
+- One Tasks view in the existing NiceGUI page/server, reached from Repos; no new port.
+- Manual task creation, persistent backlog, uncapped Today selection, and carry-over.
+- On-demand suggestions only for locally unresolved issues/PRs pending
+  classification, in review, or waiting for information. No tasks from missing
+  test dates or repo changes alone; no GitHub/release fetching or automatic selection.
+  Issue validation is also available as a manual task type.
+- Open, In progress, Deferred, Done, and Won't do; progress notes, reason validation,
+  reopening, event snapshots, idempotent retries, and version-checked saves.
+- Weekly preview and Markdown/CSV downloads using Monday-start weeks in the
+  machine's local timezone. Distinct-task totals, decision/activity events, and
+  outstanding state at cutoff are separate.
+- History retained independently of repo/issue deletion. No task-deletion UI.
+
+Use **New task** or **Suggest from stored data**, open a row in Backlog, then
+**Select for today**. Tasks not selected remain in Backlog. Deferred work becomes
+available on its revisit date but is not automatically selected.
+
+Prototype boundaries: evidence and follow-up references are free-text notes plus
+an optional source URL, not structured PR verdict/revision or release-coverage
+forms. Issue classification is saved separately in Issues. No automatic recurrence,
+PR ingestion, release discovery, freshness tracking, source-unavailability checks,
+or impact inference is included. Source snapshots are retained, but source fetching
+and review checkpoints await later phases.
+
+Suggestion deduplication uses the current rule reason and repo/item identifier.
+Task refresh and suggestion generation retire ineligible generated work as
+Won't do / Superseded / obsolete with an automatic history note, never as Done.
+Generation may reopen automatically retired work if the source qualifies again,
+but preserves human completion/rejection decisions. Manual tasks are not retired.
+Substantive source revisions are not detected; manually reopen an assessment or
+create a new task when needed. Existing report APIs remain, using the narrowed rules.
+
+Eligibility: `Resolved` handling stage or `Resolved locally`, `Closed`, or
+`Not applicable` local status overrides missing classification. For unresolved
+items, `Waiting` / `Information needed` takes precedence, followed by `In review`,
+`Waiting owner review`, or `Validating`, then unknown/missing/invalid type or
+resolution. Only one next action is suggested per source. GitHub state is unchanged.
+
+Repository/issue saves now offer **Tested now**, default No (keep the previous
+timestamp). Yes stamps the current save time; the date is read-only, not an input.
+The same rule applies to CLI classification and does not execute tests.
+
+A one-time, explicitly confirmed local baseline can mark current issues
+`Resolved locally` / `Resolved` and stamp repo/issue test dates. It appends a
+user-asserted baseline note and preserves GitHub state, classifications, and prior
+evidence/history. Back up the collections before applying it; it is not a sync rule
+and must not automatically resolve newly imported issues.
 
 ## Goal
 
@@ -25,9 +75,11 @@ proves that a lab works.
 - Support `Won't do` only with a selected reason or a supplied description.
 - Cover repository inspection, issue classification, PR validation, and release
   reading/cross-checking for possible upcoming lab problems.
-- This change is documentation only. Prototype implementation follows approval.
+- The minimal manual slice and suggestions from already-stored records are approved.
+- Use Monday-start weeks and the machine's local timezone for daily/weekly dates.
 
-All other defaults and mechanics below are proposals to validate before coding.
+The remaining detailed design below is the target, not a promise that every
+surface is included in the minimal prototype.
 This replaces the earlier proposal for daily quotas of 5 issue fixes and 10
 release reviews, and replaces the ambiguous `Skipped` state.
 
@@ -35,12 +87,12 @@ release reviews, and replaces the ambiguous `Skipped` state.
 
 | Area | Implemented today | Required addition |
 | --- | --- | --- |
-| Suggestions | [Task service](../src/labs_tracker/services/tasks.py) computes classification, validation, and repo-retest suggestions from current records | Persist task identity, decisions, daily selection, and history |
+| Suggestions | [Task service](../src/labs_tracker/services/tasks.py) selects unresolved classification/review/details work; [work log service](../src/labs_tracker/services/worklog.py) persists and reconciles generated tasks | Meaningful source-revision detection |
 | Issues | Manual classification, evidence, and timestamped handling history | Link task outcomes to the existing workflow without conflating their states |
 | PRs | Task/report logic recognizes stored PR records, but normal sync skips PRs | Read-only PR ingestion and review evidence; recognition alone is not working PR coverage |
 | Product sources | Configured first-party sources and deterministic validation | Discover individual updates, retain review checkpoints, and assess lab impact |
-| Reporting | [Report service](../src/labs_tracker/services/reports.py) exports current suggestions and issue progress | Weekly work log based on recorded actions, not regenerated suggestions |
-| Interface | Repos, Issues, and Report views | Today, Backlog, and task history/report controls |
+| Reporting | [Report service](../src/labs_tracker/services/reports.py) preserves issue exports and adds event-based weekly task exports | Structured coverage/evidence reporting |
+| Interface | Repos, Issues, Report, and Tasks with Today/Backlog/History and weekly controls | Type-specific evidence forms |
 
 Source validation runs from the Repos fact-check action or
 `python -m labs_tracker.cli sources-validate`. `sourceValidations` stores provenance,
@@ -76,7 +128,7 @@ Proposed impact verdicts: `No impact found`, `Potential impact`, and
 file, source link, and effective/deprecation date when known. Product-level reading
 can cover multiple repos; create repo-specific checks only where warranted.
 
-Existing issue fixes and retests can remain follow-up suggestions. Do not require
+Issue fixes and retests can be added as manual follow-up tasks. Do not require
 fixing an issue to finish triage or validating every lab to finish reading a release.
 
 ## Daily and Weekly Workflow
@@ -187,11 +239,13 @@ Keep domain validation in domain code and database writes in services.
 
 Deduplication keys describe the work, not the scan date:
 
-- Issue triage: repo + issue identifier + action + relevant source revision.
+- Issue triage: repo + issue identifier + action + relevant source revision (future;
+  the prototype uses the current eligibility reason rather than a source revision).
 - PR validation: repo + PR identifier + reviewed head revision.
 - Product reading: product + stable release item ID/revision.
 - Lab impact check: repo + product + release item ID/revision.
-- Routine repo review: repo + explicit review period, when recurrence is enabled.
+- Routine repo review: repo + explicit review period, when recurrence is enabled;
+  repository-only automatic suggestions are currently disabled.
 
 Do not treat unrelated metadata or page-layout changes as new substantive work.
 Repeated scans reuse the same task, including Done/Won't do decisions. A meaningful
@@ -207,9 +261,11 @@ approval before implementation and must not piggyback on current repo deletion.
 
 ## Weekly Work Report Semantics
 
-Proposed default: Monday through Sunday in a user-selected reporting timezone.
-Store event instants in UTC; resolve the selected local week to a half-open UTC
-interval `[start, next week start)`. Confirm timezone and week start before coding.
+Confirmed prototype default: Monday through Sunday in the server machine's local
+timezone. Store event instants in UTC; resolve each local midnight separately to
+form the half-open UTC interval `[start, next week start)`, including DST changes.
+Changing the machine timezone changes subsequent report/date interpretations;
+per-user timezone preferences are not part of this slice.
 
 - Include work by the date of the recorded completion/decision, not creation date
   or current GitHub state. A task created last week and completed this week belongs
@@ -252,13 +308,14 @@ risk or Won't do decision is not proof of health.
 
 ## Delivery Sequence
 
-1. **Confirm prototype decisions:** finalize remaining items below and review the
-   proposed screen flow. No application implementation in this documentation step.
+1. **Confirm prototype decisions:** minimal scope and local Monday-start weeks
+   approved; remaining automation decisions are listed below.
 2. **Manual vertical slice:** persistent task CRUD, manual Today selection,
    carry-over, decision validation, history, and weekly export. Support all task
-   types with manual evidence/links, including PRs and release notes.
+   types with manual evidence/links, including PRs and release notes. **Implemented.**
 3. **Existing-data suggestions:** adapt current task-generation rules into
    idempotent persisted suggestions without breaking existing report behavior.
+   **Implemented**, with revision limits documented above.
 4. **Read-only PR coverage:** add ingestion, freshness, head-revision tracking,
    and assessment UI. Revisit legacy normalization that removes PR records.
 5. **Release discovery:** authoritative item fetchers, checkpoints, deduplication,
@@ -299,15 +356,16 @@ behavior is tested. No automatic merges, issue closures, GitHub comments, or fix
 12. Existing issue classification, sync ownership, source validation, and report
     outputs retain their behavior until explicitly integrated and tested.
 
-## Open Decisions Before Implementation
+## Open Decisions Before Further Implementation
 
 - Routine health-review cadence: daily per repo, weekly per repo, or manually
   requested? Daily refresh availability does not imply daily checklist creation.
-- Confirm reporting timezone and week start.
-- Approve proposed states, outcome requirements, and Won't do reason catalog.
+- Refine structured task-specific outcome requirements after using the note-based
+  prototype; the proposed states and Won't do reason catalog are implemented.
 - Define when a source change is meaningful enough for a new suggestion, including
   the first-run release lookback so old history does not flood the backlog.
-- Confirm explicit deletion/retention behavior for task history.
+- Confirm any future explicit deletion/retention behavior for task history. The
+  prototype retains history and offers no delete action.
 
 ## Potential Improvements After the Prototype
 

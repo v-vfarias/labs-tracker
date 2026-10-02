@@ -7,7 +7,7 @@ from ...domain.models import OWNER_VALUES, PRODUCT_VALUES
 from ...domain.products import repo_products as _repo_products
 from ...services import tracking
 from ...services.tracking import RepoEdit, _parse_csv
-from ..formatting import _fmt_dt, _repo_lab_name
+from ..formatting import _fmt_table_dt, _repo_lab_name
 
 
 def source_url_fields(db, products_input):
@@ -36,7 +36,8 @@ def open_repo_dialog(db, save_repo: Callable[[RepoEdit], bool], existing_id: str
         involved_input = ui.select(OWNER_VALUES, value=existing.get("involvedDevs") or [], label="Owners", multiple=True).classes("w-full").props("use-chips")
         products_input = ui.select(PRODUCT_VALUES, value=_repo_products(existing.get("id"), existing.get("products") or []), label="Products", multiple=True).classes("w-full").props("use-chips")
         edited_sources = source_url_fields(db, products_input)
-        last_tested_input = ui.input("Last tested", placeholder="ISO datetime or blank", value=_fmt_dt(existing.get("lastTested"))).classes("w-full")
+        ui.label(f"Last tested (UTC): {_fmt_table_dt(existing.get('lastTested')) or 'Not recorded'}").classes("issue-meta")
+        tested_input = ui.checkbox("Tested now", value=False).tooltip("Yes records the save time; No keeps the previous test date.")
         if existing_id:
             repo_id_input.disable()
             repo_name_input.disable()
@@ -48,7 +49,7 @@ def open_repo_dialog(db, save_repo: Callable[[RepoEdit], bool], existing_id: str
                 name=repo_name_input.value,
                 involved_devs=involved_input.value,
                 products=products_input.value,
-                last_tested=last_tested_input.value,
+                tested_now=tested_input.value,
                 source_urls=edited_sources(),
             )):
                 dialog.close()
@@ -77,6 +78,8 @@ def open_repo_details(db, repo_id: str, row: dict, save_repo: Callable[[RepoEdit
                 ui.label(row.get("releaseStatus") or "Unknown").classes("issue-title")
         ui.label(row.get("releaseSummary") or "No release summary.").classes("section-hint")
         edited_sources = source_url_fields(db, products_input)
+        ui.label(f"Last tested (UTC): {_fmt_table_dt(existing.get('lastTested')) or 'Not recorded'}").classes("issue-meta")
+        tested_input = ui.checkbox("Tested now", value=False).tooltip("Yes records the save time; No keeps the previous test date.")
         for source in row.get("releaseSources", []):
             with ui.column().classes("w-full gap-1"):
                 if source["url"]:
@@ -98,7 +101,7 @@ def open_repo_details(db, repo_id: str, row: dict, save_repo: Callable[[RepoEdit
                 name=existing.get("name") or row.get("lab") or _repo_lab_name(repo_id),
                 involved_devs=owners_input.value,
                 products=products_input.value,
-                last_tested=_fmt_dt(existing.get("lastTested")),
+                tested_now=tested_input.value,
                 source_urls=edited_sources(),
             )):
                 dialog.close()
@@ -107,4 +110,3 @@ def open_repo_details(db, repo_id: str, row: dict, save_repo: Callable[[RepoEdit
             ui.button("Issues", icon="bug_report", on_click=open_issues_and_close).props("flat no-caps").classes("dialog-subtle-action")
             ui.button("Save", icon="save", on_click=save_details_and_close).props("unelevated no-caps").classes("dialog-primary-action")
     dialog.open()
-

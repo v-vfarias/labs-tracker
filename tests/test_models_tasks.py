@@ -272,11 +272,50 @@ class ModelTaskTests(unittest.TestCase):
 
         reasons = [task["reason"] for task in generate_tasks(db)]
 
-        self.assertIn("Open issue/PR with unknown type: classify", reasons)
-        self.assertIn("Open issue missing lastTested: test whether it reproduces", reasons)
-        self.assertIn("Open PR missing lastTested: validate PR for maintainers", reasons)
-        self.assertIn("Closed item missing lastTested: record validation", reasons)
-        self.assertIn("Repo changed after last tested (or never tested): retest repo/lab", reasons)
+        self.assertEqual(reasons, [
+            "Pending classification: classify the issue or PR",
+            "In review: assess the issue or proposed change",
+        ])
+
+    def test_task_eligibility_ignores_test_age_and_resolved_missing_classification(self):
+        base = {
+            "repoId": "owner/repo", "kind": "Issue", "title": "Issue", "state": "Open",
+            "typeOfIssue": "UI drift", "resolution": "Fixed in lab", "status": "Open",
+            "handlingStage": "Raised", "lastTested": None,
+        }
+        cases = [
+            ({}, False),
+            ({"typeOfIssue": None}, True),
+            ({"typeOfIssue": "invalid"}, True),
+            ({"resolution": None}, True),
+            ({"status": "In review"}, True),
+            ({"status": "Waiting owner review"}, True),
+            ({"handlingStage": "Validating"}, True),
+            ({"handlingStage": "Waiting", "waitingReason": "Information needed"}, True),
+            ({"handlingStage": "Waiting", "waitingReason": "External dependency"}, False),
+            ({"handlingStage": "Resolved", "typeOfIssue": "Unknown"}, False),
+            ({"status": "Resolved locally", "typeOfIssue": "Unknown", "handlingStage": "Validating"}, False),
+            ({"status": "Closed", "resolution": "Unknown"}, False),
+            ({"status": "Not applicable", "resolution": "Unknown"}, False),
+            ({"state": "Closed", "status": "In review"}, True),
+            ({"typeOfIssue": "SDK/code update", "resolution": "Updated instructions"}, False),
+        ]
+        for index, (fields, expected) in enumerate(cases):
+            with self.subTest(fields=fields):
+                item = {**base, "issueId": f"owner/repo#{index}", **fields}
+                for tested in (None, datetime.now(timezone.utc)):
+                    tasks = generate_tasks(FakeDb([], [{**item, "lastTested": tested}]))
+                    self.assertEqual(len(tasks), int(expected))
+
+    def test_pending_details_takes_precedence_over_review_and_classification(self):
+        issue = {
+            "issueId": "owner/repo#1", "repoId": "owner/repo", "kind": "Issue",
+            "status": "In review", "typeOfIssue": "Unknown", "resolution": "Unknown",
+            "handlingStage": "Waiting", "waitingReason": "Information needed",
+        }
+        tasks = generate_tasks(FakeDb([], [issue]))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["reason"], "Pending details: gather the requested information")
 
     def test_simplify_collections_normalizes_legacy_items(self):
         db = FakeDb(

@@ -7,7 +7,7 @@ from ...domain.models import HANDLING_STAGE_VALUES, ISSUE_TYPE_VALUES, KIND_VALU
 from ...domain.workflow import handling_stage as current_handling_stage, progress_metrics, waiting_details
 from ...services import tracking
 from ...services.tracking import IssueEdit
-from ..formatting import _fmt_dt, _fmt_table_dt, _issue_url
+from ..formatting import _fmt_table_dt, _issue_url
 
 
 def open_issue_dialog(db, save_issue: Callable[[IssueEdit], bool], existing_id: str | None = None):
@@ -59,7 +59,8 @@ def open_issue_dialog(db, save_issue: Callable[[IssueEdit], bool], existing_id: 
                 reproduction_input = ui.textarea("Investigation notes", value=existing.get("reproductionNotes") or "").classes("w-full")
                 external_report_input = ui.input("External reference URL", value=existing.get("externalReportUrl") or "").classes("w-full")
                 external_response_input = ui.textarea("External response", value=existing.get("externalResponse") or "").classes("w-full")
-                last_tested_input = ui.input("Last tested", placeholder="ISO datetime or blank", value=_fmt_dt(existing.get("lastTested"))).classes("w-full")
+                ui.label(f"Last tested (UTC): {_fmt_table_dt(existing.get('lastTested')) or 'Not recorded'}").classes("issue-meta")
+                tested_input = ui.checkbox("Tested now", value=False).tooltip("Yes records the save time; No keeps the previous test date.")
                 closing_pr_input = ui.input("Closing PR URL", placeholder="https://github.com/owner/repo/pull/123", value=existing.get("closingPrUrl") or "").classes("w-full")
 
             def save_and_close():
@@ -77,7 +78,7 @@ def open_issue_dialog(db, save_issue: Callable[[IssueEdit], bool], existing_id: 
                     reproduction_notes=reproduction_input.value,
                     external_report_url=external_report_input.value,
                     external_response=external_response_input.value,
-                    last_tested=last_tested_input.value,
+                    tested_now=tested_input.value,
                     closing_pr_url=closing_pr_input.value,
                     progress_note=progress_note_input.value,
                     waiting_reason=waiting_reason_input.value,
@@ -96,7 +97,7 @@ def open_issue_dialog(db, save_issue: Callable[[IssueEdit], bool], existing_id: 
             reproduction_input = ui.textarea("Investigation notes", value="").classes("w-full")
             external_report_input = ui.input("External reference URL", value="").classes("w-full")
             external_response_input = ui.textarea("External response", value="").classes("w-full")
-            last_tested_input = ui.input("Last tested", placeholder="ISO datetime or blank", value="").classes("w-full")
+            tested_input = ui.checkbox("Tested now", value=False).tooltip("Yes records the save time; No keeps the previous test date.")
             closing_pr_input = ui.input("Closing PR URL", placeholder="https://github.com/owner/repo/pull/123", value="").classes("w-full")
 
             def save_and_close():
@@ -113,7 +114,7 @@ def open_issue_dialog(db, save_issue: Callable[[IssueEdit], bool], existing_id: 
                     reproduction_notes=reproduction_input.value,
                     external_report_url=external_report_input.value,
                     external_response=external_response_input.value,
-                    last_tested=last_tested_input.value,
+                    tested_now=tested_input.value,
                     closing_pr_url=closing_pr_input.value,
                     progress_note=progress_note_input.value,
                     waiting_reason=waiting_reason_input.value,
@@ -124,4 +125,3 @@ def open_issue_dialog(db, save_issue: Callable[[IssueEdit], bool], existing_id: 
         with ui.row().classes("dialog-actions"):
             ui.button("Save", icon="save", on_click=save_and_close).props("unelevated no-caps").classes("dialog-primary-action")
     dialog.open()
-

@@ -120,6 +120,9 @@ Pages:
 1. **Repos**: list/create/delete repos, edit manual repo fields, sync issue data from GitHub, and run authoritative source validation with the fact-check button.
 2. **Issues**: list/filter/create/delete issue records and track general resolution progress with timestamped notes, waiting reasons, investigation evidence, and optional external references.
 3. **Report**: filter classification charts and resolution progress, ordered by observed unresolved hours. Compare waiting time, time by stage, delay reasons, and latest progress; open a row for its history. Use the PDF button to print the filtered report.
+4. **Tasks**: open from the Repos toolbar to manage a persistent backlog, choose Today,
+   record decisions, and preview/download a weekly work log. It uses the same page,
+   server, and port (8080 by default); no separate task server is needed.
 
 ## Sync behavior
 
@@ -129,6 +132,13 @@ Pages:
 - issues: `kind`, `title`, `state`
 
 Manual fields are preserved across syncs via `$setOnInsert` defaults and user edits. Sync prunes repos outside `TRACKED_REPOS` and issue records outside the current window only when they have no progress history. History-bearing issues in tracked repos are individually refreshed from GitHub when outside the recent-closed window, so stale states do not inflate open-issue counts. Lookup failures are reported as sync failures rather than silently leaving those records stale. History-bearing issues are retained for reporting even when their repo is no longer tracked, but their GitHub metadata is not refreshed in that case. Explicit issue/repo deletion still removes records and their history.
+
+Repository and issue forms (including repository details) use **Tested now**
+instead of an editable Last tested date. It defaults to No: existing timestamps
+are preserved. Yes records the current UTC save time in `lastTested`; an untested
+new record starts with no date. CLI classification uses the same Yes/No choice.
+The previous timestamp is displayed read-only. Marking tested records the user's
+assertion; it does not execute tests or resolve an issue automatically.
 
 Open-issue counts use the GitHub-owned `state`, not the manual `status` or handling stage. Marking an issue locally as `Closed` or `Resolved` does not change its GitHub state; use sync to refresh that state.
 
@@ -154,21 +164,53 @@ A successful check proves the configured public document is recognizable and cur
 
 ## Release-note agent and daily tasks
 
-The [Suggested daily tasks and weekly work log specification](docs/release-note-agent-plan.md)
-describes the proposed prototype, not an implemented task-management feature:
+The first manual prototype is implemented. See the
+[feature specification and remaining phases](docs/release-note-agent-plan.md).
 
-- maintain a persistent backlog for repository health reviews, issue triage, PR
-  validation, product-update reading, and lab-impact checks
-- choose today's tasks manually, with no automatic daily limit; unfinished work
-  carries forward without creating daily duplicates
-- record completed work, defer it, or choose `Won't do` with a reason/description
-- retain evidence and decision history for a weekly work report, keeping completed
-  work separate from declined decisions and outstanding tasks
-- add release discovery and optional automation after the manual workflow is stable
+1. Open **Tasks** from the Repos toolbar.
+2. Use **New task** for health reviews, issue triage/validation, PR reviews,
+   product-update reading, or lab-impact checks. Optional repo/product/source
+   fields describe the scope.
+3. Use **Suggest from stored data** for locally unresolved issues/PRs pending
+   classification, in review, or pending information. Missing test dates and repo
+   changes alone do not generate tasks. It does not fetch new source data.
+   Repeating it preserves human decisions and does not select tasks for you.
+4. Open a Backlog row and **Select for today**. Select as many as you want;
+   unfinished selections appear as carry-over on subsequent days.
+5. Record an outcome with **Done**, set a future revisit date with **Deferred**,
+   or select **Won't do** with a reason or custom description. Duplicate,
+   already-handled, accepted-risk, and Other reasons require supporting detail.
+   Use **Add note** for progress and **Reopen** with a note to revisit decisions.
+6. Expand **Weekly work log** to preview or download Markdown/CSV for a selected
+   week. Weeks start Monday in the server machine's local timezone. UTC timestamps
+   are stored; local dates and offsets are used for display/report boundaries.
 
-Current task suggestions are computed from stored records, not a persisted work
-log. PR sync, release-impact analysis, daily task selection, and weekly task-history
-reporting remain planned. Reviewing a release does not by itself prove repo health.
+Tasks and their event snapshots are stored in `tasks` with version-checked saves.
+Sync and explicit repo/issue deletion do not erase task history. There is no task
+deletion UI in this prototype. Report totals count distinct completed and declined
+tasks separately; activity includes reopenings and repeated completions. Outstanding
+work is reconstructed at the week cutoff rather than inferred from today's state.
+
+PR sync, automatic release discovery/impact analysis, scheduled recurrence, and
+structured type-specific evidence forms remain planned. For now, enter verdicts,
+reviewed PR revisions, source references, tests/limitations, and follow-up links
+in the outcome/progress note. Save issue classification in **Issues** separately;
+marking a task Done does not change GitHub or issue state. Existing issue-report
+exports remain unchanged. Reviewing a release does not by itself prove repo health.
+
+Suggestion eligibility excludes handling stage `Resolved` and local statuses
+`Resolved locally`, `Closed`, and `Not applicable`, even if classification is
+missing. Pending details means `Waiting` / `Information needed`; review means
+`In review`, `Waiting owner review`, or handling stage `Validating`. Otherwise an
+unknown/missing/unrecognized type or resolution means pending classification.
+Only one next action is suggested per source (details, then review, then
+classification). GitHub open/closed state is not local completion.
+
+Refreshing Tasks or requesting suggestions retires ineligible generated tasks as
+`Won't do` / `Superseded / obsolete`, with an automatic-retirement history note.
+This does not count as completed work or alter manual tasks and past decisions.
+If the source qualifies again, **Suggest from stored data** can reopen an
+automatically retired suggestion; human Done/Won't do decisions remain unchanged.
 
 ## Classification guidance
 

@@ -1,15 +1,48 @@
 """Explicitly confirmed normalization of legacy collections."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from ..config import Settings, load_settings
 from ..db import ensure_indexes, get_database
 from ..domain.models import KIND_ISSUE, STATUS_VALUES, default_issue_manual_fields, default_repo_manual_fields, normalize_issue_type, normalize_resolution
-from ..domain.workflow import handling_stage, waiting_details
+from ..domain.workflow import handling_stage, progress_update, waiting_details
 from ..integrations.github import _github_dt, _state
+from .worklog import retire_ineligible_suggestions
 
 
 def _enum(value: str | None, options: list[str], fallback: str) -> str:
     return value if value in options else fallback
+
+
+def resolve_local_baseline(db, *, confirm: bool = False, now: datetime | None = None) -> dict:
+    """Apply a user-asserted baseline, preserving GitHub metadata and prior history."""
+    if not confirm:
+        raise RuntimeError("Local baseline changes all stored issues and repos; pass confirm=True")
+    timestamp = now or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        raise ValueError("Baseline timestamp must include a timezone")
+    timestamp = timestamp.astimezone(timezone.utc)
+    note = (
+        "User-confirmed baseline: treated as resolved locally and tested at this time. "
+        "No automated test was run; GitHub state and existing classification/evidence are unchanged."
+    )
+    issues = 0
+    for issue in db.issues.find({}):
+        update = progress_update(issue, "Resolved", note, now=timestamp)
+        update["$set"].update(status="Resolved locally", lastTested=timestamp)
+        result = db.issues.update_one({"_id": issue["_id"]}, update)
+        if result.matched_count != 1:
+            raise RuntimeError("Issue disappeared during baseline update; inspect the backup before retrying")
+        issues += 1
+    repos = 0
+    for repo in db.repos.find({}):
+        result = db.repos.update_one({"_id": repo["_id"]}, {"$set": {"lastTested": timestamp}})
+        if result.matched_count != 1:
+            raise RuntimeError("Repository disappeared during baseline update; inspect the backup before retrying")
+        repos += 1
+    retired = retire_ineligible_suggestions(db, now=timestamp)
+    return {"repos": repos, "issues": issues, "retiredTasks": retired, "testedAt": timestamp}
 
 
 def simplify_collections(settings: Settings | None = None, confirm: bool = False) -> dict:
@@ -113,4 +146,3 @@ def simplify_collections(settings: Settings | None = None, confirm: bool = False
 
     ensure_indexes(db)
     return {"repos": len(normalized_repos), "issues": len(normalized_issues)}
-

@@ -1,7 +1,7 @@
 """Markdown and CSV report generation for simplified collections."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from collections import Counter
 
@@ -10,6 +10,7 @@ import pandas as pd
 from ..domain.models import KIND_ISSUE, KIND_PR, STATE_OPEN, normalize_issue_type, normalize_resolution
 from .tasks import generate_tasks
 from ..domain.workflow import progress_metrics
+from ..domain.tasks import TERMINAL_STATES, local_day, local_week, utc
 
 
 REPORT_FILTER_KEYS = {"repoId", "state", "status", "typeOfIssue"}
@@ -197,3 +198,93 @@ def generate_report(db, output_dir: str | Path = "reports") -> Path:
     report_path = output_path / "report.md"
     report_path.write_text("\n".join(markdown), encoding="utf-8")
     return report_path
+
+
+def build_work_report(db, day: date, *, now: datetime | None = None) -> dict:
+    """Report event-time work and outstanding state at the period cutoff."""
+    current = utc(now or datetime.now(timezone.utc))
+    start, end = local_week(day)
+    cutoff = min(end, current)
+    events, outstanding = [], []
+    completed_ids, declined_ids = set(), set()
+    for task in db.tasks.find({}):
+        history = sorted(task["history"], key=lambda event: utc(event["at"]))
+        past = [event for event in history if utc(event["at"]) < end and utc(event["at"]) <= current]
+        for event in past:
+            if utc(event["at"]) < start:
+                continue
+            snapshot = event["snapshot"]
+            action = event["action"]
+            if action == "Done":
+                completed_ids.add(task["taskId"])
+            if action == "Won't do":
+                declined_ids.add(task["taskId"])
+            events.append({
+                "taskId": task["taskId"], "at": utc(event["at"]).astimezone().isoformat(),
+                "action": action, "title": snapshot["title"], "kind": snapshot["kind"],
+                "repoId": snapshot["repoId"], "product": snapshot["product"],
+                "status": snapshot["status"], "note": event["note"],
+                "reason": snapshot["wontDoReason"], "sourceUrl": snapshot["sourceUrl"],
+            })
+        if past and past[-1]["snapshot"]["status"] not in TERMINAL_STATES:
+            snapshot = past[-1]["snapshot"]
+            outstanding.append({
+                key: snapshot.get(key) for key in
+                ("taskId", "title", "kind", "repoId", "product", "status", "selectedForDate", "deferredUntil")
+            })
+    events.sort(key=lambda event: datetime.fromisoformat(event["at"]).astimezone(timezone.utc))
+    return {
+        "start": start, "end": end, "asOf": cutoff, "generatedAt": current,
+        "timezone": "Machine local time (offsets shown per event)",
+        "completed": len(completed_ids), "declined": len(declined_ids),
+        "events": events, "outstanding": outstanding,
+    }
+
+
+def work_report_markdown(report: dict) -> str:
+    events = report["events"]
+    columns = ["at", "title", "kind", "repoId", "product", "action", "note", "reason", "sourceUrl"]
+
+    def table(rows: list[dict], fields: list[str]) -> str:
+        return _markdown_table(pd.DataFrame(rows, columns=fields))
+
+    return "\n".join([
+        "# Weekly work log", "",
+        f"Week starting: {local_day(report['start']).isoformat()}",
+        f"Timezone: {report['timezone']}",
+        f"Period: {report['start'].astimezone().isoformat()} to {report['end'].astimezone().isoformat()} (end exclusive)",
+        f"As of: {report['asOf'].astimezone().isoformat()}",
+        f"Generated: {report['generatedAt'].isoformat()}", "",
+        f"Completed tasks: {report['completed']} | Won't do tasks: {report['declined']}", "",
+        "Totals count distinct tasks. Repeated decisions and reopenings remain in the activity log.",
+        "Coverage: stored/manual tasks only; no automatic PR ingestion or release-impact scanning.",
+        "Task completion is not proof of repository health or a measurement of effort.", "",
+        "## Completed work", "", table([row for row in events if row["action"] == "Done"], columns), "",
+        "## Won't do decisions", "", table([row for row in events if row["action"] == "Won't do"], columns), "",
+        "## Outstanding at cutoff", "",
+        table(report["outstanding"], ["title", "kind", "repoId", "product", "status", "selectedForDate", "deferredUntil"]), "",
+        "## Activity and corrections", "", table(events, columns), "",
+    ])
+
+
+def work_report_csv(report: dict) -> str:
+    rows = [
+        {"section": "Summary", "note": (
+            f"Week starting {local_day(report['start']).isoformat()}; {report['timezone']}; "
+            f"as of {report['asOf'].astimezone().isoformat()}; "
+            f"{report['completed']} completed; {report['declined']} Won't do. "
+            "Stored/manual work only; no automatic source coverage."
+        )},
+    ] + [
+        {"section": "Activity", **row} for row in report["events"]
+    ] + [{"section": "Outstanding", **row} for row in report["outstanding"]]
+    columns = [
+        "section", "taskId", "at", "title", "kind", "repoId", "product", "action",
+        "status", "note", "reason", "sourceUrl", "selectedForDate", "deferredUntil",
+    ]
+    frame = pd.DataFrame(rows, columns=columns)
+    for column in columns:
+        frame[column] = frame[column].map(
+            lambda value: "'" + value if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")) else value
+        )
+    return frame.to_csv(index=False)
