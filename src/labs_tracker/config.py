@@ -21,6 +21,7 @@ DEFAULT_TRACKED_REPOS = [
     "MicrosoftLearning/dp-300-database-administrator",
     "MicrosoftLearning/PL-300-Microsoft-Power-BI-Data-Analyst",
     "MicrosoftLearning/mslearn-sql-developer",
+    "MicrosoftLearning/mslearn-fabric"
 ]
 
 

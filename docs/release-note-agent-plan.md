@@ -1,144 +1,321 @@
-# Release Note Agent and Daily Task Plan
+# Suggested Daily Tasks and Weekly Work Log
+
+Status: feature specification / prototype proposal, updated 2026-10-02.
+This extends the existing release-note agent plan; it is not a claim that the
+planned features below are implemented.
 
 ## Goal
 
-Build a daily workflow that watches release notes for the products attached to each lab repo, flags repos that need review, and creates a small actionable task list that balances release-note reviews with issue work.
+Help a lab maintainer inspect repository health and anticipate product changes
+without facing an overwhelming automated work queue. Turn suggestions into
+deliberate daily choices and retain an evidence-bearing record for weekly reports.
 
-The first foundation is implemented: every supported product has a configured authoritative source, and a deterministic validator records whether that source is reachable, recognizable, first-party, and current. Impact analysis and task generation remain planned work.
+Repository health here means reviewing issues, classifying them in the tracker,
+assessing PR suggestions, and checking product changes against tracked labs. It
+does not mean that a reachable source, a completed checklist, or an empty queue
+proves that a lab works.
 
-## Implemented Source Assurance
+## Confirmed Decisions
 
-Run source validation from the Repos page fact-check action or with:
+- Maintain one persistent backlog. Unfinished tasks carry forward without being
+  duplicated each day or discarded at the end of a week.
+- Let the user choose today's tasks manually, with no automatic daily limit.
+  Suggestions may be ranked, but the system does not assign work to Today.
+- Support marking work done and retaining it for a later weekly work report.
+- Support `Won't do` only with a selected reason or a supplied description.
+- Cover repository inspection, issue classification, PR validation, and release
+  reading/cross-checking for possible upcoming lab problems.
+- This change is documentation only. Prototype implementation follows approval.
 
-```bash
-python -m labs_tracker.cli sources-validate
-```
+All other defaults and mechanics below are proposals to validate before coding.
+This replaces the earlier proposal for daily quotas of 5 issue fixes and 10
+release reviews, and replaces the ambiguous `Skipped` state.
 
-Results are upserted by product in `sourceValidations` with status, reason, final URL, HTTP status, latest public date, content hash, and check time. Validation establishes document provenance and freshness; it does not claim that a product change affects a lab.
+## Existing Foundation and Gaps
 
-## Implemented Troubleshooting Flow
+| Area | Implemented today | Required addition |
+| --- | --- | --- |
+| Suggestions | [Task service](../src/labs_tracker/services/tasks.py) computes classification, validation, and repo-retest suggestions from current records | Persist task identity, decisions, daily selection, and history |
+| Issues | Manual classification, evidence, and timestamped handling history | Link task outcomes to the existing workflow without conflating their states |
+| PRs | Task/report logic recognizes stored PR records, but normal sync skips PRs | Read-only PR ingestion and review evidence; recognition alone is not working PR coverage |
+| Product sources | Configured first-party sources and deterministic validation | Discover individual updates, retain review checkpoints, and assess lab impact |
+| Reporting | [Report service](../src/labs_tracker/services/reports.py) exports current suggestions and issue progress | Weekly work log based on recorded actions, not regenerated suggestions |
+| Interface | Repos, Issues, and Report views | Today, Backlog, and task history/report controls |
 
-Issues use a simple evidence-bearing progression:
+Source validation runs from the Repos fact-check action or
+`python -m labs_tracker.cli sources-validate`. `sourceValidations` stores provenance,
+freshness, URL, HTTP status, content hash, and check time; it is not impact analysis.
 
-1. `Raised`
-2. `Investigating`
-3. `In progress`
-4. `Waiting` (when needed)
-5. `Validating`
-6. `Resolved`
+Issue handling remains `Raised`, `Investigating`, `In progress`, `Waiting`,
+`Validating`, and `Resolved`, with notes and waiting reasons. Its elapsed-time
+metrics are not effort. Task status must remain separate from issue handling,
+local classification, and GitHub open/closed state.
 
-Stages can be skipped or revisited, including reopening. Each stage or waiting-detail change needs a progress note; waiting additionally requires a categorized reason with an optional person/team/vendor. Unusual circumstances belong in notes. External reporting is optional and vendor-neutral.
+Use the existing broad product catalog and shared source overrides: Foundry,
+Foundry SDK, Foundry Toolkit for VS Code, Azure Machine Learning Studio, Microsoft
+Fabric, Power BI, Azure SQL, GitHub Copilot, GitHub Actions, GitHub, and Azure DevOps.
+Do not introduce a parallel product taxonomy.
 
-The issue dialog and CLI append timestamped history with evidence snapshots. Reports show observed unresolved hours, waiting time and reasons, stage durations, and latest progress. Timing begins with the first recorded entry, excludes resolved periods, and is not effort or complete issue age. Sync retains history-bearing issues outside its normal window for later analysis, without refreshing their GitHub metadata outside that window.
+## Task Types and Completion Evidence
 
-## Product Scope
+| Type | Suggested work unit | What counts as done |
+| --- | --- | --- |
+| Repository health review | Inspect a repo's open issues, PR coverage, and outstanding signals | Checklist and summary of what was checked; link follow-up tasks for unresolved findings |
+| Issue triage | Inspect one issue and classify it in the platform | Saved classification plus a short assessment or linked issue-history entry |
+| PR validation | Assess one PR's relevance, proposed change, and supporting evidence | Verdict and rationale; record tests performed or explicitly state what was not tested |
+| Product update review | Read new release notes for a product since the last completed review | Record sources and review coverage; identify potentially affected repos or explain no likely impact |
+| Lab impact check | Cross-check a specific product change against a specific lab | Record affected instructions/dependencies and an impact verdict, with follow-up when needed |
 
-Use broad product buckets so the tracker stays useful without becoming a subproduct taxonomy:
+Proposed PR verdicts: `Valid suggestion`, `Needs changes`, `Not applicable`,
+and `Unable to verify`. Completing an assessment is not an approval, merge, or
+claim of successful execution. If verification is still required, leave the task
+open/deferred or complete the assessment with an explicit linked follow-up.
 
-- Foundry
-- Foundry SDK
-- Foundry Toolkit for VS Code
-- Azure Machine Learning Studio
-- Microsoft Fabric
-- Power BI
-- Azure SQL
-- GitHub Copilot
-- GitHub Actions
-- GitHub
-- Azure DevOps
+Proposed impact verdicts: `No impact found`, `Potential impact`, and
+`Confirmed impact`. Include the affected product/version, relevant lab step or
+file, source link, and effective/deprecation date when known. Product-level reading
+can cover multiple repos; create repo-specific checks only where warranted.
 
-Foundry-related AI services should usually map to `Foundry` unless a lab is specifically about SDK behavior, VS Code tooling, or Machine Learning Studio.
+Existing issue fixes and retests can remain follow-up suggestions. Do not require
+fixing an issue to finish triage or validating every lab to finish reading a release.
 
-## Data Model Additions
+## Daily and Weekly Workflow
 
-Add release-note review fields to `repos`:
+1. Refresh available source data on demand. Show last successful refresh and any
+   source/repo failures; a failed check is not "nothing new."
+2. Browse ranked suggestions in Backlog, filtered by repo, product, and task type.
+   Explain why each suggestion exists and show source freshness.
+3. Select any number of tasks for Today, or add a manual task with a relevant link.
+4. Inspect the evidence and record progress. Choose Done, Defer, or Won't do.
+5. Show unfinished previously selected tasks as carry-over on later days. Allow
+   returning a task to Backlog without treating it as completed or rejected.
+6. At weekly review, summarize completed work, decisions not to proceed, and
+   remaining work separately. Keep unresolved tasks in the same backlog.
 
-```json
-{
-  "releaseReviewStatus": "Healthy | Review needed ",
-  "releaseReviewReason": "Short agent-generated explanation",
-  "releaseReviewSource": "Release note title or feed/source name",
-  "releaseReviewUrl": ["https://...", "..."]
-  "releaseReviewFlaggedAt": "datetime",
-  "releaseReviewCompletedAt": "datetime"
-}
-```
+Today is a view/selection, not a task status. Reading source data daily must not
+create a daily copy of every unresolved task. Scheduled refresh is optional later;
+the prototype must work without a background scheduler or AI service.
 
-Add a `tasks` collection:
+### Suggested Prioritization
 
-```json
-{
-  "taskId": "stable string",
-  "kind": "Issue fix | Release review",
-  "repoId": "owner/repo",
-  "issueId": "owner/repo#123 or null",
-  "product": "Foundry",
-  "title": "Short action text",
-  "reason": "Why this task exists",
-  "sourceUrl": "https://...",
-  "status": "Open | Done | Skipped",
-  "priority": 10,
-  "createdAt": "datetime",
-  "completedAt": "datetime"
-}
-```
+Rank known breaking changes/deprecation deadlines and active lab failures first,
+then unclassified issues, PR assessments, product updates, and routine reviews.
+Surface aging tasks so lower-ranked work does not disappear indefinitely.
+Show the reason for ranking; confidence is distinct from urgency. Manual choice
+always wins, with no hidden quota or automatic selection.
 
-## Daily Agent Pipeline
+## Task Lifecycle and Decisions
 
-1. Load repos and their selected products.
-2. Fetch release-note sources for those products.
-3. Keep a cache of seen release-note item IDs or URLs so old notes do not create duplicate tasks.
-4. For each new release note, ask the agent to classify possible lab impact:
-   - `No likely impact`
-   - `Needs human review`
-   - `Likely issue`
-5. For `Needs human review` or `Likely issue`, set the repo `releaseReviewStatus` to `Review needed` and store the source/reason.
-6. Upsert one release-review task per repo/product/source note.
-7. Generate issue-fix tasks from open issues, prioritizing unknown/unvalidated open issues.
-8. Produce the daily task queue.
+Proposed states: `Open`, `In progress`, `Deferred`, `Done`, and `Won't do`.
 
-## Daily Task Rules
+- Done requires an outcome summary and completion timestamp. Evidence links are
+  optional unless the task-specific outcome requires one.
+- Defer requires a revisit date and may include a note. It stays in Backlog,
+  stays out of Today until due, and becomes available again when due without
+  being automatically selected. Lack of time is deferral, not rejection.
+- Won't do requires a reason code or nonblank custom description. Selecting a
+  standard reason is sufficient except where supporting detail is required below.
+- Reopening Done or Won't do requires a note and retains the previous decision.
+  Correcting outcomes must append history rather than rewrite earlier evidence.
+- Generation/refresh must not reset user state, notes, deferral, or selection.
+  Source closure/deletion alone must not silently mark local work Done.
+- A reviewed change that does not affect the lab is Done with `No impact found`,
+  not Won't do: the investigation was useful work.
 
-Keep the daily list small:
+### Proposed Won't Do Reasons
 
-- Up to 5 issue-fix tasks per day.
-- Up to 10 release-review tasks per day.
-- Always put high-confidence release-note impacts above generic release-review tasks.
-- Prefer open issues with unknown classification before closed issue cleanup.
-- Do not create duplicate tasks for the same repo and release note.
+| Reason | Supporting detail |
+| --- | --- |
+| Out of scope | Optional description of the boundary |
+| Duplicate | Required link/reference to the original task or tracked work |
+| Superseded / obsolete | Optional replacement or changed circumstance |
+| Already handled elsewhere | Required link or description of where it was handled |
+| Not relevant to tracked labs | Optional explanation; use Done if an impact review was performed |
+| Accepted risk / low value | Required rationale describing the trade-off |
+| Other | Required nonblank description |
 
-## Human Review Flow
+Whitespace-only input is invalid. Show validation errors without closing the
+dialog or changing the task. Won't do applies to this task/signal only; it must
+not suppress all future updates for the repository or product.
 
-1. Open a release-review task.
-2. Read the release note and inspect the affected lab repo.
-3. If the lab is unaffected, mark the task `Done` and set repo `releaseReviewStatus` to `Healthy`.
-4. If the lab needs a change, create or link a GitHub issue, then mark the review task `Done`.
-5. If a GitHub issue was created, the normal issue task workflow handles the fix.
+## Prototype Screens
 
-## Manual Run First, Daily Later
+**Tasks / Today**
 
-Start with a manual CLI command:
+- Selected work and an explicit carry-over section; counts by state/type.
+- Rows show type, repo/product, title, suggestion reason, age, and source freshness.
+- Actions: Start, Done, Defer, Won't do, Return to backlog, and View history.
+- Empty state directs the user to select from Backlog, not an automatic task fill.
 
-```bash
-python -m labs_tracker.cli release-scan
-python -m labs_tracker.cli tasks --daily
-```
+**Tasks / Backlog**
 
-After the workflow is stable, run it daily with Windows Task Scheduler:
+- Filters for type, repo, product, status, and revisit date; ranked suggestions.
+- Select for Today and manual task creation. No automatic daily limit.
+- Separate completed/declined history from actionable work; allow reopening.
 
-```powershell
-$Action = New-ScheduledTaskAction -Execute "C:\Users\Public\Documents\labs-tracker\.venv\Scripts\python.exe" -Argument "-m labs_tracker.cli release-scan" -WorkingDirectory "C:\Users\Public\Documents\labs-tracker"
-$Trigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
-Register-ScheduledTask -TaskName "LabsTrackerReleaseScan" -Action $Action -Trigger $Trigger -Description "Scan product release notes for lab impact"
-```
+**Task detail**
 
-## Implementation Phases
+- Source links, associated issues/PRs, review scope, and evidence.
+- Outcome form appropriate to task type; Won't do reason selector and note field.
+- Append-only timeline of state changes, outcomes, and follow-up references.
 
-1. Add repo release-review fields and a `tasks` collection with indexes.
-2. Replace mocked release signals with product source configuration. **Complete.**
-3. Add release-note fetchers using RSS or public docs pages where available.
-4. Add deduplication for seen release notes.
-5. Add a local agent/evaluator step that scores release-note relevance against repo metadata.
-6. Add `release-scan` and `tasks --daily` CLI commands.
-7. Add web UI for release-review tasks and completion.
-8. Add Windows Task Scheduler setup docs after manual scans are reliable.
+**Report / Weekly work**
+
+- Week/date-range selection, totals by type/repo/product, and Markdown/CSV export.
+- Completed work with outcomes and links; Won't do decisions with reasons.
+- Deferred/open carry-over and known coverage gaps in separate sections.
+- Preserve existing issue-progress reporting and existing exports.
+
+## Proposed Persistence and Deduplication
+
+Use a new `tasks` collection, not extra statuses on `issues`. A task should retain:
+
+| Fields | Purpose |
+| --- | --- |
+| `taskId`, `dedupeKey`, `kind` | Stable identity and unique work-unit key |
+| `repoIds`, `product`, `issueId`, `prUrl` | Optional scope; product reading may span repos |
+| `title`, `reason`, `sourceRefs`, `sourceRevision` | Explain the suggestion and preserve its source |
+| `status`, `selectedForDate`, `deferredUntil` | State, local-date selection, and revisit date |
+| `createdAt`, `updatedAt`, `completedAt` | UTC timestamps; completion projection is not the history |
+| `outcome`, `wontDoReason`, `decisionNote`, `followUpRefs` | Current human decision and evidence |
+| `history` | Timestamped events with previous/new state and outcome/source/scope snapshots |
+
+For a small single-user prototype, embedded history allows one atomic task update.
+Use unique `taskId`/`dedupeKey` indexes, event IDs to make retried actions idempotent,
+and an update-version guard so two UI sessions cannot silently overwrite decisions.
+Keep domain validation in domain code and database writes in services.
+
+Deduplication keys describe the work, not the scan date:
+
+- Issue triage: repo + issue identifier + action + relevant source revision.
+- PR validation: repo + PR identifier + reviewed head revision.
+- Product reading: product + stable release item ID/revision.
+- Lab impact check: repo + product + release item ID/revision.
+- Routine repo review: repo + explicit review period, when recurrence is enabled.
+
+Do not treat unrelated metadata or page-layout changes as new substantive work.
+Repeated scans reuse the same task, including Done/Won't do decisions. A meaningful
+new source revision may create a linked follow-up rather than silently reopening a
+completed task. Track the reviewed revision so a changed PR is not reported as
+validated against its new head.
+
+Store source refresh/checkpoints separately from task completion: fetched/seen is
+not read/reviewed. Advance review coverage only for the items actually reviewed.
+Preserve task snapshots if source records are pruned or a repo stops being tracked;
+mark unavailable sources visibly. Explicit task-history deletion policy needs
+approval before implementation and must not piggyback on current repo deletion.
+
+## Weekly Work Report Semantics
+
+Proposed default: Monday through Sunday in a user-selected reporting timezone.
+Store event instants in UTC; resolve the selected local week to a half-open UTC
+interval `[start, next week start)`. Confirm timezone and week start before coding.
+
+- Include work by the date of the recorded completion/decision, not creation date
+  or current GitHub state. A task created last week and completed this week belongs
+  in this week's completed work.
+- Read durable task history, never infer completed work from today's suggestions.
+- Count distinct tasks with completion events; show repeat completions/reopenings
+  in the timeline rather than inflating the completed-task total.
+- A later reopening does not erase earlier work. Identify reopened tasks and
+  corrections explicitly; use event snapshots for historical titles and outcomes.
+- Keep Won't do counts and reasons separate from completed-work totals.
+- Show carry-over as of the period end, reconstructed from state/selection events.
+  For an ongoing week, label it as of the report generation time.
+- Include report range, timezone, generation time, source coverage gaps, evidence,
+  and follow-ups. No invented effort estimates or productivity score.
+- Exported reports are saved snapshots; a later export may include later-recorded
+  corrections. Do not promise immutable or tamper-proof audit reporting.
+
+Example: an issue classified Monday and a release found harmless Tuesday are two
+completed tasks. A duplicate PR-review task declined Wednesday is one Won't do
+decision. A lab impact check deferred to next week remains outstanding work.
+
+## Release Monitoring and Health Signals
+
+1. Reuse configured authoritative product sources and their validation.
+2. Discover stable release items and retain title, publication/effective dates,
+   URL, revision, and fetch status. Avoid constructing guessed monthly URLs.
+3. Present updates for human reading first, with related repos/products.
+4. Cross-check likely changes against lab instructions, dependencies, and versions.
+5. Record an impact verdict and link follow-up work. Creating a GitHub issue is a
+   separate explicit user action, not an automatic result of analysis.
+
+Later AI assistance may propose `No likely impact`, `Needs human review`, or
+`Likely issue`, but must include source citations, affected lab evidence, and
+uncertainty. Product membership alone is insufficient evidence of a defect.
+
+Prefer release-review coverage labels such as `Review needed`, `Reviewed through
+<date/revision>`, and `Unknown / source unavailable` over a blanket `Healthy`.
+Completing one task must not clear other outstanding repo impacts. An accepted
+risk or Won't do decision is not proof of health.
+
+## Delivery Sequence
+
+1. **Confirm prototype decisions:** finalize remaining items below and review the
+   proposed screen flow. No application implementation in this documentation step.
+2. **Manual vertical slice:** persistent task CRUD, manual Today selection,
+   carry-over, decision validation, history, and weekly export. Support all task
+   types with manual evidence/links, including PRs and release notes.
+3. **Existing-data suggestions:** adapt current task-generation rules into
+   idempotent persisted suggestions without breaking existing report behavior.
+4. **Read-only PR coverage:** add ingestion, freshness, head-revision tracking,
+   and assessment UI. Revisit legacy normalization that removes PR records.
+5. **Release discovery:** authoritative item fetchers, checkpoints, deduplication,
+   product reading and per-lab follow-ups, with explicit partial-failure handling.
+6. **Optional assistance/automation:** scheduled daily refresh and evidence-backed
+   impact suggestions only after manual operation is reliable.
+
+Potential future CLI names are `release-scan` and `tasks --daily`; these are not
+implemented commands or setup instructions. Schedule only after retry/failure
+behavior is tested. No automatic merges, issue closures, GitHub comments, or fixes.
+
+## Acceptance Scenarios for Implementation
+
+1. Refreshing unchanged inputs twice creates one task per work unit and preserves
+   any completion, Won't do, notes, deferral, and Today selection.
+2. Selecting zero, one, or more than fifteen tasks works without an automatic cap;
+   refreshing does not select additional tasks.
+3. An unfinished Monday selection is visible as carry-over Tuesday and survives
+   the week boundary; no duplicate daily instance is created.
+4. Done persists its outcome, timestamp, and evidence across app restarts and
+   appears in the week of completion, even if created earlier.
+5. Won't do rejects an empty reason/description and whitespace-only custom text;
+   standard reasons, custom descriptions, and required supporting details follow
+   the rules above. Rejected saves leave state unchanged.
+6. Deferral hides work from Today until its revisit date; due work is available
+   without automatic selection and is not counted as Done or Won't do.
+7. Reviewing a release with no lab impact records completed work. A possible
+   impact includes a rationale and linked follow-up; other impacts remain visible.
+8. PR assessments preserve the reviewed head and test limitations. A later head
+   revision is not silently covered by the earlier verdict.
+9. A failed source fetch produces a visible coverage gap, preserves older work,
+   and does not mark the repo healthy or advance the reviewed checkpoint.
+10. Weekly exports separate completed work, declined decisions, and carry-over;
+    test timezone/week boundaries, reopening, repeat completion, and later edits.
+11. Source pruning or repo untracking does not remove historical work evidence;
+    repeated saves do not append duplicate events and concurrent edits conflict
+    explicitly rather than losing data.
+12. Existing issue classification, sync ownership, source validation, and report
+    outputs retain their behavior until explicitly integrated and tested.
+
+## Open Decisions Before Implementation
+
+- Routine health-review cadence: daily per repo, weekly per repo, or manually
+  requested? Daily refresh availability does not imply daily checklist creation.
+- Confirm reporting timezone and week start.
+- Approve proposed states, outcome requirements, and Won't do reason catalog.
+- Define when a source change is meaningful enough for a new suggestion, including
+  the first-run release lookback so old history does not flood the backlog.
+- Confirm explicit deletion/retention behavior for task history.
+
+## Potential Improvements After the Prototype
+
+- Batch product reading shared by many repos, while retaining per-lab impact work.
+- Show a coverage matrix of repos/products last reviewed, separate from task counts.
+- Highlight approaching deprecations and review age without forcing daily quotas.
+- Add estimated effort or a voluntary time budget only if useful; never infer
+  actual effort from elapsed task age.
+- Learn from Won't do reasons to propose better filters, with user approval before
+  suppressing future suggestions.
+- Provide evidence-backed AI summaries as drafts, with human-controlled decisions.

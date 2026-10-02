@@ -106,20 +106,29 @@ class MongoIntegrationTests(unittest.TestCase):
         repo = SimpleNamespace(full_name="owner/repo", name="Updated lab", archived=False,
                                pushed_at=datetime(2026, 9, 18, tzinfo=timezone.utc))
         repo.get_issues = Mock(side_effect=lambda **kwargs: [github_issue, github_pr] if kwargs["state"] == "open" else [github_closed])
+        repo.get_issue = Mock(return_value=SimpleNamespace(
+            number=90, title="Older closed issue", state="closed", pull_request=None,
+        ))
         github = Mock()
         github.get_repo.return_value = repo
         settings = Settings("mongodb://127.0.0.1:27017", self.database_name, "test-only", ["owner/repo"])
         with patch("labs_tracker.services.sync.get_database", return_value=self.db), \
                 patch("labs_tracker.services.sync.get_github", return_value=github):
             for _ in range(2):
-                self.assertEqual(sync(settings), {"success": True, "repoCount": 1, "issueCount": 2})
+                self.assertEqual(sync(settings), {"success": True, "repoCount": 1, "issueCount": 3})
         saved = get_issue(self.db, self.issue.issue_id)
         self.assertEqual(saved["title"], "Updated title")
         self.assertEqual(saved["typeOfIssue"], "UI drift")
         self.assertEqual(saved["externalResponse"], "Keep evidence")
         self.assertEqual(saved["handlingHistory"], history)
         self.assertEqual(get_repo(self.db, "owner/repo")["involvedDevs"], ["Owner"])
-        self.assertIsNotNone(get_issue(self.db, "owner/repo#90"))
+        retained = get_issue(self.db, "owner/repo#90")
+        self.assertEqual(retained["state"], "Closed")
+        self.assertEqual(retained["status"], "Open")
+        self.assertTrue(retained["handlingHistory"])
+        self.assertEqual(self.db.issues.count_documents({"repoId": "owner/repo", "state": "Open"}), 1)
+        self.assertEqual(repo.get_issue.call_count, 2)
+        repo.get_issue.assert_called_with(number=90)
         for issue_id in ("owner/repo#2", "owner/repo#91", "owner/repo#92"):
             self.assertIsNone(get_issue(self.db, issue_id))
         self.assertEqual(get_issue(self.db, "owner/repo#3")["state"], "Closed")

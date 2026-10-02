@@ -76,7 +76,9 @@ These rules are checked in `tests/test_architecture.py` where implemented.
   tests now patch `labs_tracker.services.sync.get_database` and `get_github`;
   maintenance tests patch `labs_tracker.services.maintenance.get_database`.
 - Sync still skips PRs, preserves manual fields, and retains history-bearing issues
-  outside the sync window. Destructive normalization still requires confirmation.
+  outside the sync window. Retained issues in tracked repos have their GitHub fields
+  refreshed individually when outside the recent-closed window. Destructive
+  normalization still requires confirmation.
 - Stored product defaults and display fallbacks intentionally remain distinct.
 - Web issue filters support legacy aliases, while report queries use literal
   filters and restrict records to issues. CLI classification has its own eligibility

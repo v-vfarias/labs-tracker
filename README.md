@@ -123,12 +123,14 @@ Pages:
 
 ## Sync behavior
 
-`sync` upserts tracked repos and issues using only GitHub-owned fields. PRs are skipped for now. For each tracked repo, sync keeps all open issues and the 10 most recently updated closed issues.
+`sync` upserts tracked repos and issues using only GitHub-owned fields. PRs are skipped for now. For each tracked repo, sync keeps all open issues and the 10 most recently updated closed issues, plus older issues with progress history.
 
 - repos: `name`, `status`, `lastUpdated`
 - issues: `kind`, `title`, `state`
 
-Manual fields are preserved across syncs via `$setOnInsert` defaults and user edits. Sync prunes repos outside `TRACKED_REPOS` and issue records outside the current window only when they have no progress history. History-bearing issues are retained for reporting, even when their repo is no longer tracked; their GitHub metadata is not refreshed outside the sync window. Explicit issue/repo deletion still removes records and their history.
+Manual fields are preserved across syncs via `$setOnInsert` defaults and user edits. Sync prunes repos outside `TRACKED_REPOS` and issue records outside the current window only when they have no progress history. History-bearing issues in tracked repos are individually refreshed from GitHub when outside the recent-closed window, so stale states do not inflate open-issue counts. Lookup failures are reported as sync failures rather than silently leaving those records stale. History-bearing issues are retained for reporting even when their repo is no longer tracked, but their GitHub metadata is not refreshed in that case. Explicit issue/repo deletion still removes records and their history.
+
+Open-issue counts use the GitHub-owned `state`, not the manual `status` or handling stage. Marking an issue locally as `Closed` or `Resolved` does not change its GitHub state; use sync to refresh that state.
 
 Repo owners and products are selected from curated lists in the web app instead of typed as free text. Product tracking intentionally uses broad buckets such as `Foundry`, `Foundry SDK`, `Foundry Toolkit for VS Code`, `Azure Machine Learning Studio`, `Microsoft Fabric`, `Power BI`, `Azure SQL`, `GitHub Copilot`, `GitHub Actions`, `GitHub`, and `Azure DevOps`.
 
@@ -152,13 +154,21 @@ A successful check proves the configured public document is recognizable and cur
 
 ## Release-note agent and daily tasks
 
-Release-impact analysis is the next phase in [docs/release-note-agent-plan.md](docs/release-note-agent-plan.md). The intended flow is:
+The [Suggested daily tasks and weekly work log specification](docs/release-note-agent-plan.md)
+describes the proposed prototype, not an implemented task-management feature:
 
-- fetch release notes for each repo's selected products
-- flag repos as needing review when a product change may affect labs
-- create release-review tasks and issue-fix tasks
-- keep daily issue work capped around 5 fixes, with faster release reviews batched separately
-- mark review tasks done to return repos to a healthy state, or create/link issues when lab changes are needed
+- maintain a persistent backlog for repository health reviews, issue triage, PR
+  validation, product-update reading, and lab-impact checks
+- choose today's tasks manually, with no automatic daily limit; unfinished work
+  carries forward without creating daily duplicates
+- record completed work, defer it, or choose `Won't do` with a reason/description
+- retain evidence and decision history for a weekly work report, keeping completed
+  work separate from declined decisions and outstanding tasks
+- add release discovery and optional automation after the manual workflow is stable
+
+Current task suggestions are computed from stored records, not a persisted work
+log. PR sync, release-impact analysis, daily task selection, and weekly task-history
+reporting remain planned. Reviewing a release does not by itself prove repo health.
 
 ## Classification guidance
 

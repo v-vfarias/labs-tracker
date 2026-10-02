@@ -41,6 +41,18 @@ def sync(settings: Settings | None = None, closed_issue_limit: int = 10, prune: 
         issues = [issue for issue in gh_repo.get_issues(state="open") if not issue.pull_request]
         issues.extend(_latest_closed_issues(gh_repo, closed_issue_limit))
 
+        retained_issues = db.issues.find({
+            "repoId": repo_id,
+            "kind": KIND_ISSUE,
+            "handlingHistory.0": {"$exists": True},
+            "issueId": {"$nin": [f"{repo_id}#{issue.number}" for issue in issues]},
+        }, {"issueId": 1})
+        for retained in retained_issues:
+            number = int(retained["issueId"].rsplit("#", 1)[1])
+            issue = gh_repo.get_issue(number=number)
+            if not issue.pull_request:
+                issues.append(issue)
+
         for issue in issues:
             if issue.number in seen_numbers:
                 continue
@@ -63,4 +75,3 @@ def sync(settings: Settings | None = None, closed_issue_limit: int = 10, prune: 
         db.issues.delete_many({"handlingHistory.0": {"$exists": False}, "$or": [{"repoId": {"$nin": list(synced_repo_ids)}}, {"kind": {"$ne": KIND_ISSUE}}, {"issueId": {"$nin": list(synced_issue_ids)}}]})
 
     return {"success": True, "repoCount": repo_count, "issueCount": issue_count}
-
