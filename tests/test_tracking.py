@@ -266,6 +266,43 @@ class WebTrackingTests(unittest.TestCase):
         self.assertEqual(repo_table.rows[0]["releaseSources"][0]["url"], url)
         self.assertFalse(self.dialog().value)
 
+    def test_pilot_check_blocks_dirty_source_and_restores_button_on_failure(self):
+        from labs_tracker.domain.release_checks import PILOT_REPO
+        from labs_tracker.ui.dialogs.repos import open_repo_details
+
+        check = AsyncMock(return_value={"lastAttempt": {"status": "First check"}, "reviewStatus": "Not assessed",
+            "sourceStatuses": [{"product": "Foundry", "source": PRODUCT_SOURCES["Foundry"],
+                                "validation": {"status": "Validated", "reason": "Official article fetched"}}]})
+        open_repo_details(self.db, PILOT_REPO, {"products": "Foundry"}, Mock(), Mock(), check_release=check, release_enabled=True)
+        button = self.element(label="Check release note")
+        with patch("nicegui.elements.button.handle_event") as dispatch:
+            self.fire(button)
+        callback = dispatch.call_args.args[0]
+        field = self.element(label="Foundry source URL (shared)")
+        original = field.value
+        field.set_value("https://devblogs.microsoft.com/foundry/whats-new-edited/")
+        asyncio.run(callback())
+        check.assert_not_awaited()
+        field.set_value(original)
+        asyncio.run(callback())
+        check.assert_awaited_once_with(PILOT_REPO)
+        self.assertTrue(any(getattr(element, "text", "") == "1 of 1 sources validated" for element in self.dialog().descendants()))
+        self.assertTrue(self.dialog().value)
+        self.assertTrue(button.enabled)
+        check.side_effect = ValueError("already running")
+        asyncio.run(callback())
+        self.assertTrue(button.enabled)
+        self.notify.assert_called_with("already running", color="negative")
+
+    def test_release_check_is_pilot_only_and_opt_in(self):
+        from labs_tracker.domain.release_checks import PILOT_REPO
+        from labs_tracker.ui.dialogs.repos import open_repo_details
+
+        open_repo_details(self.db, "owner/repo", {}, Mock(), Mock(), check_release=AsyncMock(), release_enabled=True)
+        self.assertFalse(any(element._props.get("label") == "Check release note" for element in self.client.elements.values()))
+        open_repo_details(self.db, PILOT_REPO, {}, Mock(), Mock(), check_release=AsyncMock())
+        self.assertFalse(self.element(label="Check release note").enabled)
+
     def test_navigation_resets_classification_mode_and_retains_repo_filters(self):
         cards = [element for element in self.client.elements.values() if "clickable-summary" in element.classes]
         issues_panel = self.element(id="issues-panel")

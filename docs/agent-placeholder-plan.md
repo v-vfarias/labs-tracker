@@ -1,64 +1,60 @@
-# Repository Agent Placeholder Plan
+# Foundry Release-Check Pilot
 
-Status: implementation plan.
+## Milestone 1
 
-## Goal
+Implemented for MicrosoftLearning/mslearn-ai-agents with a mock analyzer:
 
-Prove the end-to-end interaction for running one agent task against one selected
-repository before adding an agent SDK, prompts, persistence, or automation.
+- Repo dialog and headless CLI share a native async Python service.
+- Official RSS/archive discovery and article extraction are real and bounded.
+- Canonical URLs identify articles; normalized content hashes detect edits.
+  Unreconciled redirected identities fail coverage checks, not pass as unchanged.
+- First check establishes the baseline and invokes the mock. Reuse requires
+  matching source scope, selected-file hashes, backend and analyzer version.
+- GitHub evidence is pinned to a commit, with paths, blob hashes, line counts and
+  source links. Default scope is Exercises plus numbered Python lab files.
+- Mock output states impact is not assessed. No real summary or risk verdict is
+  claimed, and no revision findings are fabricated.
+- Existing findings survive later checks. Review requires a note and a matching
+  state version. Repo lifecycle status remains Live/Archived.
 
-The placeholder returns a deterministic response. It does not inspect GitHub,
-call a model, modify repository data, or claim that work was performed.
+## Persistence
 
-## Validated Flow
+`releaseSnapshots` holds immutable normalized articles and raw/semantic hashes.
+`releaseCheckRuns` holds attempt/review evidence. `repoReleaseChecks` is the
+authoritative publication point: only its referenced successful run and review
+represent accepted state. Unreferenced history documents can exist after a lost
+compare-and-set or crash; never infer current state from the newest history row.
+Failures remain separate from the last successful comparison/assessment baseline.
 
-1. The user opens a repository from the Repos table.
-2. The repository detail dialog shows a **Run agent** action.
-3. The action passes that dialog's `repo_id` to an asynchronous UI callback.
-4. The callback uses `nicegui.run.io_bound` to call a normal Python service
-   function without blocking the UI.
-5. The placeholder service returns a structured result containing the repository,
-   task name, status, and response text.
-6. The UI displays the response and restores the button after success or failure.
+A ten-minute Mongo lease and five-minute run deadline bound execution. Publication
+checks token, expiry, version and current source configuration. Superseded workers
+cannot publish or unlock a newer worker. No replica-set transaction is required.
+Source changes reset comparison scope but retain findings. Global validation is
+updated only for the exact saved URL fetched; it is never an impact verdict.
 
-This validates the proposed button-to-Python flow. The UI should call an imported
-function rather than start a second Python process. A later CLI command can call
-the same service function if script-style execution is useful for testing.
+Review notes have timestamps but no authenticated actor identity. This is not a
+multi-user audit trail. History has no automatic retention policy yet.
 
-## Proposed Boundary
+## Milestone 2: GitHub Copilot SDK
 
-```text
-ui/dialogs/repos.py
-  Run agent button and result presentation
-          |
-          v
-ui/actions.py
-  loading state, io_bound call, error notification
-          |
-          v
-services/repo_agent.py
-  run_repo_agent(repo_id, task) -> AgentRunResult
-```
+After accepting the first flow, implement the local Python Copilot SDK analyzer,
+not GitHub Actions or an Azure-hosted agent. Preserve the UI/service boundary.
+Lazy-load the SDK behind an optional dependency and explicit live setting; keep
+base Python 3.10 support while requiring a supported newer interpreter for live use.
 
-The service result should be a small dataclass or typed dictionary. For the first
-slice, use one fixed task such as `repository_summary` and return text similar to:
+Validate structured summaries/findings with article and lab citations, severity
+and confidence. Treat fetched material as untrusted evidence, not instructions.
+Use deny-by-default permissions/tools, no shell/file/GitHub writes, bounded inputs
+and outputs, explicit cancellation and session/client cleanup. Require live
+provenance before publishing real revision findings. Harmless later checks must
+not clear previous findings. Test authentication, permissions, model errors,
+malformed output and cancellation before enabling live use.
+`RELEASE_CHECK_BACKEND=copilot` currently fails explicitly, without mock fallback.
 
-```text
-Placeholder agent completed repository_summary for owner/repo.
-```
+## Verification
 
-## First Implementation Slice
-
-- Add the placeholder service with no external agent dependency.
-- Add one **Run agent** button to the repository detail dialog.
-- Disable the button while it runs and prevent duplicate clicks.
-- Display the returned repository, task, status, and response in the dialog.
-- Test the service result and the UI callback's success and failure paths.
-- Do not persist runs yet; the purpose is to validate control flow.
-
-## Next Decision Gate
-
-After the placeholder works, choose the real agent runtime and define its input,
-output, authentication, timeout, cancellation, and audit requirements. Only then
-replace the service implementation. The button and callback contract should stay
-stable.
+Run `python -m unittest discover -s tests -v`. Set
+`LABS_TRACKER_RUN_MONGO_TESTS=1` for isolated local MongoDB tests. These create and
+drop uniquely named test databases, never the working database. Live smoke checks
+also use isolated databases; publisher markup and GitHub file selection can change
+independently of deterministic fixtures.

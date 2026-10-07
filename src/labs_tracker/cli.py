@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import asyncio
+import json
 
 import typer
 from rich.console import Console
@@ -14,6 +16,8 @@ from .integrations.release_sources import validate_all_sources
 from .services.maintenance import simplify_collections
 from .services.sync import sync as run_sync
 from .services.tracking import classification_candidates, update_issue
+from .domain.release_checks import PILOT_REPO
+from .services.release_checks import check_release_notes
 
 app = typer.Typer(help="Local GitHub lab issue validation tracker.")
 console = Console()
@@ -112,6 +116,26 @@ def web(host: str = typer.Option("127.0.0.1"), port: int = typer.Option(8080)):
     from .web import run
 
     run(host=host, port=port)
+
+
+@app.command("release-check")
+def release_check(repo: str = typer.Option(PILOT_REPO, "--repo"), as_json: bool = typer.Option(False, "--json")):
+    """Check official release articles against the saved pilot baseline (mock assessment)."""
+    try:
+        result = asyncio.run(check_release_notes(_db(), repo))
+    except Exception as error:
+        typer.echo(json.dumps({"status": "Failed", "error": str(error)}) if as_json else str(error), err=True)
+        raise typer.Exit(1) from error
+    if as_json:
+        typer.echo(json.dumps(result, default=str))
+    else:
+        typer.echo(f"{result['status']} | Mock backend / impact not assessed")
+        for summary in result.get("assessment", {}).get("summary", []):
+            typer.echo(summary)
+        if result.get("error"):
+            typer.echo(result["error"], err=True)
+    if result["status"] in ("Failed", "Incomplete", "Cancelled"):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

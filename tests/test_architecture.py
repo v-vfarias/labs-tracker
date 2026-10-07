@@ -79,7 +79,7 @@ class ArchitectureTests(unittest.TestCase):
             return (isinstance(value, ast.Name) and value.id == "db") or (isinstance(value, ast.Attribute) and value.attr == "db")
 
         paths = [PACKAGE / "web.py", PACKAGE / "cli.py", *(PACKAGE / "ui").rglob("*.py")]
-        collection_names = {"repos", "issues", "productSources", "sourceValidations"}
+        collection_names = {"repos", "issues", "productSources", "sourceValidations", "repoReleaseChecks", "releaseSnapshots", "releaseCheckRuns"}
         for path in paths:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if isinstance(node, ast.Attribute) and is_database(node.value):

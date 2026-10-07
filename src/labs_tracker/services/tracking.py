@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from ..domain.models import ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, normalize_issue_type, normalize_resolution
 from ..domain.products import repo_products
+from ..domain.release_checks import PILOT_REPO
+from .release_checks import get_release_check
 from ..domain.workflow import progress_update
 from ..integrations.release_sources import PRODUCT_SOURCES, check_source_url, save_source_urls, source_for_product, source_validation
 
@@ -189,6 +191,7 @@ def repo_overview(db) -> list[dict]:
             "products": products,
             "openIssues": db.issues.count_documents({"repoId": repo_id, "state": "Open"}),
             "sourceStatuses": product_source_statuses(db, products),
+            "revisionStatus": get_release_check(db, repo_id).get("reviewStatus", "Not assessed") if repo_id == PILOT_REPO else "Not configured",
         })
     return rows
 

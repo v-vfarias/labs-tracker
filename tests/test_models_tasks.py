@@ -95,6 +95,7 @@ class FakeDb:
         self.issues = FakeCollection(issues)
         self.items = FakeCollection(items or [])
         self.syncRuns = FakeCollection(sync_runs or [])
+        self.repoReleaseChecks = FakeCollection([])
 
     def list_collection_names(self):
         names = ["repos", "issues"]

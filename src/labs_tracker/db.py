@@ -28,3 +28,6 @@ def ensure_indexes(db: Database) -> None:
     db.issues.create_index([("handlingStage", ASCENDING)])
 
     db.sourceValidations.create_index([("product", ASCENDING)], unique=True)
+    db.repoReleaseChecks.create_index([("repoId", ASCENDING), ("product", ASCENDING)], unique=True)
+    db.releaseCheckRuns.create_index([("repoId", ASCENDING), ("checkedAt", ASCENDING)])
+    db.releaseSnapshots.create_index([("article_id", ASCENDING), ("contentHash", ASCENDING)], unique=True)

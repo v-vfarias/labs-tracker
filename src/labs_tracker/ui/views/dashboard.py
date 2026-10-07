@@ -47,6 +47,7 @@ class DashboardView:
                     {"name": "owners", "label": "Owners", "field": "owners", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
                     {"name": "openIssues", "label": "Open issues", "field": "openIssues", "sortable": True, "align": "left"},
                     {"name": "releaseStatus", "label": "Source status", "field": "releaseStatus", "sortable": True, "align": "left"},
+                    {"name": "revisionStatus", "label": "Lab revision", "field": "revisionStatus", "sortable": True, "align": "left"},
                     {"name": "releaseSummary", "label": "Validation evidence", "field": "releaseSummary", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
                     {"name": "releaseSources", "label": "Sources", "field": "releaseSources", "align": "left", "classes": "wrap-cell", "headerClasses": "wrap-cell"},
                 ],
@@ -121,6 +122,7 @@ class DashboardView:
                     "openIssues": doc["openIssues"],
                     "repoUrl": _repo_url(repo_id),
                     "releaseStatus": release_signal["status"],
+                    "revisionStatus": doc["revisionStatus"],
                     "releaseSummary": release_signal["summary"],
                     "releaseSources": release_signal["sources"],
                 }

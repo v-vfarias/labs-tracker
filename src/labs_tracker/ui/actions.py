@@ -5,6 +5,10 @@ from nicegui import run as nicegui_run, ui
 
 from ..integrations.release_sources import validate_all_sources
 from ..services.sync import sync
+from ..config import load_settings
+from ..services.release_checks import check_release_notes, get_release_check, mark_reviewed
+from ..services.tracking import get_repo, product_source_statuses
+from ..domain.products import repo_products
 
 
 class PageActions:
@@ -22,6 +26,24 @@ class PageActions:
         self.on_sync = on_sync
         self.on_sources = on_sources
         self.sync_state = {"running": False, "dots": 0, "notification": None, "timer": None}
+
+    def release_state(self, repo_id: str) -> dict:
+        repo = get_repo(self.db, repo_id) or {}
+        return {**get_release_check(self.db, repo_id),
+            "sourceStatuses": product_source_statuses(self.db, repo_products(repo_id, repo.get("products") or []))}
+
+    def release_enabled(self) -> bool:
+        return load_settings().release_check.enabled
+
+    async def run_release_check(self, repo_id: str) -> dict:
+        await check_release_notes(self.db, repo_id)
+        self.on_sources()
+        return await nicegui_run.io_bound(self.release_state, repo_id)
+
+    async def review_release(self, repo_id: str, finding_ids: list[str], note: str, version: int) -> dict:
+        await nicegui_run.io_bound(mark_reviewed, self.db, repo_id, finding_ids, note, version)
+        self.on_sources()
+        return await nicegui_run.io_bound(self.release_state, repo_id)
 
     async def run_issue_sync(self):
         if self.sync_state["running"]:

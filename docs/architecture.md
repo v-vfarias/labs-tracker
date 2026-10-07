@@ -15,14 +15,18 @@ src/labs_tracker/
     models.py                Classification values, aliases and defaults
     workflow.py              Progress history rules and elapsed-time metrics
     products.py              Product display defaults and normalization
+    release_checks.py        Article identity, semantic hashes and comparison
   services/
     tracking.py              Typed edits, CRUD, queries, summaries and source status
     sync.py                  Upserts, sync window and history retention
     maintenance.py           Explicitly confirmed legacy normalization
     reports.py               Report queries, metrics, Markdown and CSV export
+    release_checks.py        Pilot orchestration, leases, snapshots and review
   integrations/
     github.py                GitHub client creation, fetching and mapping
     release_sources.py       Source catalog, validation and result persistence
+    release_notes.py         Bounded Foundry article discovery and extraction
+    release_agent.py         Async mock analyzer boundary (no model calls)
   ui/
     app.py                   Page composition, navigation and cross-view callbacks
     state.py                 Per-client selections and navigation mode
@@ -45,6 +49,12 @@ remain explicit compatibility re-exports. New code imports the owning package.
 Do not create a `web/` package alongside the existing web entry-point module.
 
 ## Dependency Rules
+
+The optional release-check pilot adds three separate collections without changing
+the repo lifecycle or issue workflow. Its native async service runs blocking HTTP,
+GitHub and Mongo operations in worker threads. CLI and UI share that service;
+dialogs receive callbacks, never collections. Source validity is product-scoped;
+release comparison and lab revision state are repo/product-scoped.
 
 - Domain code uses only the standard library and other domain modules. Existing
   MongoDB-shaped progress-update dictionaries remain part of its contract, but

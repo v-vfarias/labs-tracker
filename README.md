@@ -140,7 +140,7 @@ Repo dialogs include a source URL field for each selected product. URLs are shar
 
 The repo table's Sources column and the repo dialog list every associated product's link and validation status. The summary counts validated sources across the entire list, not just the first product. DevOps includes Azure DevOps, GitHub, GitHub Actions, and GitHub Copilot. Source validation is not an assessment of whether a release affects lab instructions.
 
-Foundry defaults to [Microsoft Foundry updates: July and August 2026](https://devblogs.microsoft.com/foundry/whats-new-in-microsoft-foundry-july-august-2026/). As checked on September 17, 2026, the [What's New archive](https://devblogs.microsoft.com/foundry/category/whats-new/) shows monthly roundups with occasional combined months and event editions, not a guaranteed monthly or bimonthly schedule. The July/August author note explains the combined edition as a summer-break catch-up. Slugs mix abbreviated and full month names; discover subsequent posts through the archive or [category RSS feed](https://devblogs.microsoft.com/foundry/category/whats-new/feed/) rather than constructing URLs. The app pins the selected article until it is edited; it does not automatically discover the next roundup.
+Foundry defaults to [Microsoft Foundry updates: July and August 2026](https://devblogs.microsoft.com/foundry/whats-new-in-microsoft-foundry-july-august-2026/). The [What's New archive](https://devblogs.microsoft.com/foundry/category/whats-new/) has monthly roundups with occasional combined months and event editions, not a guaranteed schedule. Discovery uses the archive and [category RSS feed](https://devblogs.microsoft.com/foundry/category/whats-new/feed/), not guessed URLs. The shared source URL stays pinned until edited. The optional pilot check uses it as a discovery boundary for subsequent roundups without changing that URL.
 
 Each supported product maps to an official Microsoft or GitHub release document in `release_sources.py`. The deterministic validator checks that the document is reachable, stays on an allowlisted first-party host, contains the expected product identity, and exposes recent public release evidence. It stores the final URL, check time, latest public date, HTTP status, reason, and content hash in `sourceValidations`.
 
@@ -152,12 +152,51 @@ python -m labs_tracker.cli sources-validate
 
 A successful check proves the configured public document is recognizable and current; it does not yet determine whether a release affects a particular lab.
 
-## Repository agent placeholder
+## Pilot release checks
 
-The [repository agent placeholder plan](docs/agent-placeholder-plan.md) defines a
-small first slice for validating the UI-to-Python control flow against one selected
-repository. The placeholder will return a deterministic response without calling a
-model, modifying repository data, or persisting a run.
+The first milestone is implemented for `MicrosoftLearning/mslearn-ai-agents` and
+Foundry. Set `RELEASE_CHECK_ENABLED=true` in `.env`, then restart the app. Open the
+pilot's repo row and select **Check release note**, or run:
+
+```bash
+python -m labs_tracker.cli release-check --repo MicrosoftLearning/mslearn-ai-agents --json
+```
+
+The pilot must already exist in the tracker. Save source URL edits before checking.
+The saved source must be an official Foundry What's New article. Discovery reads
+the RSS feed and archive, follows pagination back to the saved article, and
+rechecks watched articles. It compares normalized text, links and code, not page
+navigation or scripts. Results distinguish **First check**, **Updated**, and
+**No changes**. Incomplete or failed checks never replace the successful baseline.
+
+**The analyzer is a mock.** Fetching, comparison, GitHub evidence and persistence
+are real; main-change summarization and lab-impact analysis are not. Results say
+**Mock / Not assessed** and never manufacture a real revision finding. Source
+validity and the separate **Lab revision** field are independent. Live GitHub
+Copilot SDK integration is the next milestone after accepting this flow.
+
+Evidence is read-only at one commit of `RELEASE_CHECK_LAB_REF` (default `main`).
+Default selection covers Exercises instructions and numbered Python lab source
+and dependencies, not Consolidated labs or the entire repo. Override the JSON
+array `RELEASE_CHECK_LAB_PATHS` for another bounded scope. Results list captured
+files and commit. A read-only `GITHUB_TOKEN` is recommended; unauthenticated rate
+limits may prevent collecting the default scope. No lab code is executed.
+
+Limits: 20 articles, 10 archive pages, 2 MB/article or archive page, 5 MB/feed,
+50 lab files, 200 KB/file, 1 MB total lab text, 20-second individual HTTP timeout
+and five-minute overall run timeout. Limit violations fail explicitly, never
+silently truncate. Interrupted blocking requests may finish in worker threads,
+but cannot publish a stale run.
+
+MongoDB stores `releaseSnapshots`, `releaseCheckRuns`, and `repoReleaseChecks`.
+A ten-minute expiring lease prevents concurrent runs across clients. Failed
+assessments retry even on identical content; analyzer version and selected-file
+changes invalidate cached assessments. Existing findings survive later checks
+until explicitly reviewed with a note. The mock creates no findings, so the
+review control only appears when findings exist.
+
+See the [milestone notes](docs/agent-placeholder-plan.md). Scheduling, multi-repo
+rollout, automatic PRs/issues, and lab execution are not included.
 
 ## Classification guidance
 

@@ -2,6 +2,7 @@
 from nicegui import ui
 
 from ..services import tracking
+from ..domain.release_checks import PILOT_REPO
 from ..services.tracking import DuplicateRecordError, IssueEdit, RepoEdit, TrackingValidationError
 from .actions import PageActions
 from .dialogs import issues as issue_dialogs, repos as repo_dialogs
@@ -153,7 +154,12 @@ def build_ui(db) -> PageState:
             if not repo_id:
                 return
             state.repo_id = repo_id
-            repo_dialogs.open_repo_details(db, repo_id, row, save_repo, reveal_repo_issues)
+            repo_dialogs.open_repo_details(
+                db, repo_id, row, save_repo, reveal_repo_issues,
+                check_release=actions.run_release_check, review_release=actions.review_release,
+                release_state=actions.release_state(repo_id) if repo_id == PILOT_REPO else {},
+                release_enabled=actions.release_enabled(),
+            )
 
         def save_issue(edit: IssueEdit) -> bool:
             try:
