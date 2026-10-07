@@ -13,9 +13,6 @@ from labs_tracker.config import Settings
 from labs_tracker.db import ensure_indexes
 from labs_tracker.integrations import release_sources
 from labs_tracker.services.reports import build_issue_report
-from labs_tracker.domain.tasks import TaskDraft
-from labs_tracker.services import worklog
-from labs_tracker.services.maintenance import resolve_local_baseline
 from labs_tracker.services.sync import sync
 from labs_tracker.services.tracking import (
     DuplicateRecordError, IssueEdit, IssueFilters, RepoEdit, TrackingValidationError,
@@ -39,12 +36,10 @@ class MongoIntegrationTests(unittest.TestCase):
         self.issue = IssueEdit(issue_id="owner/repo#1", repo_id="owner/repo", title="Test issue")
 
     def test_indexes_and_typed_repo_round_trip(self):
-        before = datetime.now(timezone.utc)
-        save_repo(self.db, replace(self.repo, tested_now=True))
+        save_repo(self.db, replace(self.repo, last_tested="2026-09-18"))
         saved = get_repo(self.db, "owner/repo")
         self.assertEqual(saved["_id"], "owner/repo")
-        tested_at = saved["lastTested"]
-        self.assertGreaterEqual(tested_at.timestamp(), before.timestamp() - 0.001)
+        self.assertEqual(saved["lastTested"], datetime(2026, 9, 18, tzinfo=timezone.utc))
         with self.assertRaises(DuplicateRecordError):
             save_repo(self.db, self.repo)
         with self.assertRaises(DuplicateKeyError):
@@ -53,51 +48,6 @@ class MongoIntegrationTests(unittest.TestCase):
         saved = get_repo(self.db, "owner/repo")
         self.assertEqual(saved["name"], "Test lab")
         self.assertEqual(saved["involvedDevs"], ["Owner"])
-        self.assertEqual(saved["lastTested"], tested_at)
-
-    def test_confirmed_baseline_preserves_github_classification_and_evidence(self):
-        save_repo(self.db, self.repo)
-        save_issue(self.db, replace(self.issue, external_response="Keep this evidence"))
-        original = get_issue(self.db, self.issue.issue_id)
-        worklog.suggest_tasks(self.db)
-        with self.assertRaises(RuntimeError):
-            resolve_local_baseline(self.db)
-        self.assertEqual(get_issue(self.db, self.issue.issue_id), original)
-        now = datetime(2026, 10, 2, tzinfo=timezone.utc)
-        result = resolve_local_baseline(self.db, confirm=True, now=now)
-        self.assertEqual(result, {"repos": 1, "issues": 1, "retiredTasks": 1, "testedAt": now})
-        saved = get_issue(self.db, self.issue.issue_id)
-        for key in ("state", "title", "kind", "typeOfIssue", "resolution", "externalResponse"):
-            self.assertEqual(saved[key], original[key])
-        self.assertEqual(saved["status"], "Resolved locally")
-        self.assertEqual(saved["handlingStage"], "Resolved")
-        self.assertEqual(saved["lastTested"], now)
-        self.assertEqual(saved["handlingHistory"][:-1], original["handlingHistory"])
-        self.assertIn("No automated test was run", saved["handlingHistory"][-1]["note"])
-        self.assertEqual(saved["handlingHistory"][-1]["evidence"]["externalResponse"], "Keep this evidence")
-        self.assertEqual(get_repo(self.db, self.repo.repo_id)["lastTested"], now)
-        self.assertEqual(get_repo(self.db, self.repo.repo_id)["status"], "Live")
-        self.assertEqual(worklog.suggest_tasks(self.db), 0)
-        self.assertEqual(self.db.tasks.find_one({})["status"], "Won't do")
-
-    def test_tasks_persist_decisions_retries_and_history_independently_of_repos(self):
-        save_repo(self.db, self.repo)
-        draft = TaskDraft(title="Review repo", kind="Repository health review", repo_id="owner/repo")
-        worklog.create_task(self.db, draft, task_id="task")
-        for _ in range(2):
-            worklog.update_task(self.db, "task", 0, "Done", event_id="done", note="Reviewed; no follow-up")
-        worklog.create_task(self.db, draft, task_id="task")
-        reread = self.client[self.database_name]
-        saved = worklog.get_task(reread, "task")
-        self.assertEqual(saved["status"], "Done")
-        self.assertEqual(len(saved["history"]), 2)
-        self.assertEqual(saved["history"][-1]["snapshot"]["outcome"], "Reviewed; no follow-up")
-        with self.assertRaises(worklog.TaskConflictError):
-            worklog.update_task(reread, "task", 0, "Reopen", event_id="stale", note="Correction")
-        with self.assertRaises(DuplicateKeyError):
-            self.db.tasks.insert_one({**saved, "_id": "different"})
-        delete_repo(self.db, "owner/repo")
-        self.assertEqual(len(worklog.get_task(reread, "task")["history"]), 2)
 
     def test_issue_history_validation_filters_and_report(self):
         save_repo(self.db, self.repo)

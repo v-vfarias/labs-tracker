@@ -23,7 +23,7 @@ class RepoEdit:
     existing_id: str | None = None
     involved_devs: str | list[str] | tuple[str, ...] | None = None
     products: str | list[str] | tuple[str, ...] | None = None
-    tested_now: bool = False
+    last_tested: str = ""
     source_urls: dict[str, str] = field(default_factory=dict)
 
 
@@ -42,24 +42,26 @@ class IssueEdit:
     reproduction_notes: str = ""
     external_report_url: str = ""
     external_response: str = ""
-    tested_now: bool = False
+    last_tested: str = ""
     closing_pr_url: str = ""
     progress_note: str = ""
     waiting_reason: str = "None"
     waiting_on: str = ""
 
 
-def tested_fields(tested_now: bool) -> dict:
-    if not isinstance(tested_now, bool):
-        raise TrackingValidationError("Tested now must be Yes or No")
-    return {"lastTested": datetime.now(timezone.utc)} if tested_now else {}
+def _edit_datetime(value: str) -> datetime | None:
+    try:
+        return _parse_dt(value)
+    except ValueError as error:
+        raise TrackingValidationError("Invalid lastTested format. Use ISO datetime.") from error
 
 
 def save_repo(db, edit: RepoEdit) -> None:
+    parsed_last_tested = _edit_datetime(edit.last_tested)
     payload = {
         "involvedDevs": _parse_csv(edit.involved_devs),
         "products": _parse_csv(edit.products),
-        **tested_fields(edit.tested_now),
+        "lastTested": parsed_last_tested,
     }
     try:
         for url in edit.source_urls.values():
@@ -81,7 +83,6 @@ def save_repo(db, edit: RepoEdit) -> None:
                 "name": edit.name,
                 "status": "Live",
                 "lastUpdated": None,
-                "lastTested": None,
                 **payload,
             }},
             upsert=True,
@@ -90,6 +91,7 @@ def save_repo(db, edit: RepoEdit) -> None:
 
 
 def save_issue(db, edit: IssueEdit) -> None:
+    parsed_last_tested = _edit_datetime(edit.last_tested)
     manual = {
         "typeOfIssue": normalize_issue_type(edit.type_of_issue),
         "resolution": normalize_resolution(edit.resolution),
@@ -97,7 +99,7 @@ def save_issue(db, edit: IssueEdit) -> None:
         "reproductionNotes": edit.reproduction_notes.strip(),
         "externalReportUrl": edit.external_report_url.strip(),
         "externalResponse": edit.external_response.strip(),
-        **tested_fields(edit.tested_now),
+        "lastTested": parsed_last_tested,
         "closingPrUrl": edit.closing_pr_url.strip(),
     }
     existing = db.issues.find_one({"issueId": edit.existing_id}) if edit.existing_id else {}
@@ -108,8 +110,6 @@ def save_issue(db, edit: IssueEdit) -> None:
         )
     except ValueError as error:
         raise TrackingValidationError(str(error)) from error
-    if not edit.existing_id:
-        manual.setdefault("lastTested", None)
     update["$set"].update(manual)
     if edit.existing_id:
         update_issue(db, edit.existing_id, update)
@@ -271,4 +271,5 @@ def _resolution_query(value: str) -> dict:
 
 
 def _needs_classification_query() -> dict:
-    return {"$or": [{"typeOfIssue": _issue_type_query("Unknown")}, {"resolution": _resolution_query("Unknown")}]} 
+    return {"$or": [{"typeOfIssue": _issue_type_query("Unknown")}, {"resolution": _resolution_query("Unknown")}]}
+

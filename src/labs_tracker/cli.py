@@ -1,6 +1,8 @@
 """Typer command line interface for the local lab tracker."""
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
+
 import typer
 from rich.console import Console
 
@@ -11,7 +13,7 @@ from .domain.workflow import handling_stage as current_handling_stage, progress_
 from .integrations.release_sources import validate_all_sources
 from .services.maintenance import simplify_collections
 from .services.sync import sync as run_sync
-from .services.tracking import classification_candidates, tested_fields, update_issue
+from .services.tracking import classification_candidates, update_issue
 
 app = typer.Typer(help="Local GitHub lab issue validation tracker.")
 console = Console()
@@ -78,13 +80,17 @@ def classify(limit: int = typer.Option(10, help="Maximum open unknown/untested i
         update = progress_update(item, handling_stage, note, reason, waiting_on)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    tested_now = typer.confirm("Tested now? No keeps the previous test date", default=False)
+    default_last_tested = date.today().isoformat() if item.get("lastTested") is None else ""
+    last_tested_input = typer.prompt("Last tested date (YYYY-MM-DD, blank to keep empty)", default=default_last_tested)
+    last_tested = None
+    if last_tested_input.strip():
+        last_tested = datetime.fromisoformat(last_tested_input.strip()).replace(tzinfo=timezone.utc)
 
     update["$set"].update({
                 "typeOfIssue": normalize_issue_type(type_of_issue),
                 "resolution": normalize_resolution(resolution),
                 "status": status,
-                **tested_fields(tested_now),
+                "lastTested": last_tested,
     })
     update_issue(db, item["issueId"], update)
     console.print(f"Updated {item['issueId']}.")

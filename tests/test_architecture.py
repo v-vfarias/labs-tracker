@@ -15,7 +15,6 @@ class ArchitectureTests(unittest.TestCase):
         for legacy, owner, name in [
             ("models", "domain.models", "normalize_issue_type"),
             ("workflow", "domain.workflow", "progress_update"),
-            ("tasks", "services.tasks", "generate_tasks"),
             ("report", "services.reports", "generate_report"),
             ("sync", "services.sync", "sync"),
             ("sync", "services.maintenance", "simplify_collections"),
@@ -57,7 +56,7 @@ class ArchitectureTests(unittest.TestCase):
                         self.assertIn(module.split(".")[0], sys.stdlib_module_names, path.name)
 
     def test_owning_packages_do_not_import_legacy_facades(self):
-        facades = {"models", "workflow", "tasks", "report", "sync", "release_sources"}
+        facades = {"models", "workflow", "report", "sync", "release_sources"}
         for directory in ("domain", "services", "integrations", "ui"):
             for path in (PACKAGE / directory).rglob("*.py"):
                 package = "labs_tracker." + ".".join(path.parent.relative_to(PACKAGE).parts)
@@ -80,7 +79,7 @@ class ArchitectureTests(unittest.TestCase):
             return (isinstance(value, ast.Name) and value.id == "db") or (isinstance(value, ast.Attribute) and value.attr == "db")
 
         paths = [PACKAGE / "web.py", PACKAGE / "cli.py", *(PACKAGE / "ui").rglob("*.py")]
-        collection_names = {"repos", "issues", "productSources", "sourceValidations", "tasks"}
+        collection_names = {"repos", "issues", "productSources", "sourceValidations"}
         for path in paths:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if isinstance(node, ast.Attribute) and is_database(node.value):

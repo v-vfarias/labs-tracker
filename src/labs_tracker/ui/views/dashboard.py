@@ -35,7 +35,6 @@ class DashboardView:
                 self.source_validate_button.tooltip("Validate release sources")
                 self.report_button = ui.button(icon="analytics").props("flat round dense")
                 self.report_button.tooltip("Open issue report")
-                self.tasks_button = ui.button("Tasks", icon="checklist").props("flat dense")
                 self.refresh_repo_button = ui.button(icon="refresh").props("flat round dense")
                 self.refresh_repo_button.tooltip("Refresh dashboard")
                 self.new_repo_button = ui.button(icon="add").props("flat round dense")
@@ -129,3 +128,4 @@ class DashboardView:
         self.repo_table.rows = rows
         self.repo_table.update()
         self.refresh_summary()
+

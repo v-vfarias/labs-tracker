@@ -1,5 +1,4 @@
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
@@ -38,8 +37,7 @@ class CLITests(unittest.TestCase):
         database.issues.find.return_value.sort.return_value.limit.return_value = [item]
         with patch.object(cli, "_db", return_value=database), \
              patch.object(cli, "_choose", side_effect=["SDK/code issues", "Unknown", "Open", "Investigating"]), \
-             patch.object(cli.typer, "prompt", side_effect=["1", "Investigate"]), \
-             patch.object(cli.typer, "confirm", return_value=False):
+             patch.object(cli.typer, "prompt", side_effect=["1", "Investigate", "2026-09-18"]):
             result = self.runner.invoke(cli.app, ["classify", "--limit", "3"])
         self.assertEqual(result.exit_code, 0, result.output)
         database.issues.find.return_value.sort.return_value.limit.assert_called_once_with(3)
@@ -48,20 +46,4 @@ class CLITests(unittest.TestCase):
         self.assertEqual(update["$set"]["typeOfIssue"], "SDK/code issues")
         self.assertNotIn("externalResponse", update["$set"])
         self.assertNotIn("title", update["$set"])
-        self.assertNotIn("lastTested", update["$set"])
         self.assertEqual(update["$push"]["handlingHistory"]["evidence"]["externalResponse"], "Existing evidence")
-
-    def test_classify_tested_yes_uses_save_time(self):
-        item = {"issueId": "owner/repo#1", "handlingStage": "Raised"}
-        database = Mock()
-        database.issues.find.return_value.sort.return_value.limit.return_value = [item]
-        before = datetime.now(timezone.utc)
-        with patch.object(cli, "_db", return_value=database), \
-             patch.object(cli, "_choose", side_effect=["UI drift", "Unknown", "Open", "Raised"]), \
-             patch.object(cli.typer, "prompt", side_effect=["1", ""]), \
-             patch.object(cli.typer, "confirm", return_value=True):
-            result = self.runner.invoke(cli.app, ["classify"])
-        self.assertEqual(result.exit_code, 0, result.output)
-        timestamp = database.issues.update_one.call_args.args[1]["$set"]["lastTested"]
-        self.assertGreaterEqual(timestamp, before)
-        self.assertLessEqual(timestamp, datetime.now(timezone.utc))

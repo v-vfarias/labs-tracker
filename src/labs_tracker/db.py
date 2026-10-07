@@ -28,5 +28,3 @@ def ensure_indexes(db: Database) -> None:
     db.issues.create_index([("handlingStage", ASCENDING)])
 
     db.sourceValidations.create_index([("product", ASCENDING)], unique=True)
-    db.tasks.create_index([("taskId", ASCENDING)], unique=True)
-    db.tasks.create_index([("dedupeKey", ASCENDING)], unique=True)

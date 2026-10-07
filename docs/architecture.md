@@ -19,8 +19,6 @@ src/labs_tracker/
     tracking.py              Typed edits, CRUD, queries, summaries and source status
     sync.py                  Upserts, sync window and history retention
     maintenance.py           Explicitly confirmed legacy normalization
-    tasks.py                 Task generation from database records
-    worklog.py               Persistent tasks, deduplicated suggestions and decisions
     reports.py               Report queries, metrics, Markdown and CSV export
   integrations/
     github.py                GitHub client creation, fetching and mapping
@@ -38,12 +36,11 @@ src/labs_tracker/
       dashboard.py           Repo table, source signals and summary counts
       issues.py              Issue filters, table and refresh behavior
       report.py              Report filters, tables, charts and print action
-      tasks.py               Today/backlog, task decisions and weekly downloads
     assets/tracker.css       Screen, responsive and print styling
 ```
 
 Each package has a minimal `__init__.py`; importing one does not start the app.
-The old root modules for models, workflow, tasks, report, sync and release sources
+The old root modules for models, workflow, report, sync and release sources
 remain explicit compatibility re-exports. New code imports the owning package.
 Do not create a `web/` package alongside the existing web entry-point module.
 
@@ -221,29 +218,3 @@ Use isolated data; never run destructive normalization against the working datab
 merely to validate a refactor. Default tests use mocks/fakes and temporary report
 directories; opt-in integration tests use disposable local MongoDB databases.
 Neither suite makes live GitHub requests or accesses the working database.
-
-## Persistent Task Prototype
-
-`domain/tasks.py` validates task creation/actions and defines local-day/week
-boundaries. `services/worklog.py` owns the `tasks` collection, idempotent suggestion
-imports, atomic version-checked updates, and embedded event snapshots. Unique
-task/deduplication indexes are initialized alongside existing indexes. Repo/issue
-deletion and sync do not cascade into task history.
-
-The Tasks view is composed by `ui/app.py` alongside the existing views, using the
-same page, server, and port. It has no scheduler or new runtime dependencies.
-`services/reports.py` adds weekly task-history queries and Markdown/CSV generation
-without changing the existing issue-report API or exports. Reports use UTC event
-instants and the machine's local Monday-start week boundaries.
-
-Suggestions now use local unresolved classification/review/information states,
-not missing test timestamps or repo changes. Tasks refresh retires ineligible
-generated work with a recorded Won't do decision; subsequent suggestion generation
-can reopen only automatically retired work. Manual tasks/history are retained.
-Tracking edit requests use `tested_now: bool`; True stamps UTC save time and False
-omits `lastTested` from updates, preserving it. Repository/issue dialogs and CLI
-classification use this shared rule rather than accepting typed dates.
-
-Focused task tests cover validation, carry-over, selection beyond fifteen tasks,
-deferral, retries/conflicts, deduplication, week boundaries, historical snapshots,
-UI callbacks/downloads, and real MongoDB persistence in an isolated test database.

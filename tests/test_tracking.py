@@ -24,26 +24,23 @@ class TrackingWriteTests(unittest.TestCase):
         self.issue = IssueEdit(issue_id="owner/repo#1", repo_id="owner/repo", title="Issue")
 
     def test_repo_create_keeps_defaults_and_normalizes_inputs(self):
-        now = datetime(2026, 10, 2, tzinfo=timezone.utc)
-        with patch("labs_tracker.services.tracking.datetime") as clock:
-            clock.now.return_value = now
-            save_repo(self.db, replace(self.repo, involved_devs=" Owner, ,Other ", products=[" Foundry "], tested_now=True))
+        save_repo(self.db, replace(self.repo, involved_devs=" Owner, ,Other ", products=[" Foundry "], last_tested="2026-09-18"))
         self.db.repos.update_one.assert_called_once_with(
             {"id": "owner/repo"}, {"$setOnInsert": {
                 "_id": "owner/repo", "id": "owner/repo", "name": "Lab", "status": "Live", "lastUpdated": None,
                 "involvedDevs": ["Owner", "Other"], "products": ["Foundry"],
-                "lastTested": now,
+                "lastTested": datetime(2026, 9, 18, tzinfo=timezone.utc),
             }}, upsert=True,
         )
 
     def test_repo_edit_does_not_change_synced_fields(self):
         save_repo(self.db, replace(self.repo, existing_id="original/repo", name="Changed"))
         self.db.repos.update_one.assert_called_once_with(
-            {"id": "original/repo"}, {"$set": {"involvedDevs": [], "products": []}},
+            {"id": "original/repo"}, {"$set": {"involvedDevs": [], "products": [], "lastTested": None}},
         )
 
     def test_repo_validation_precedes_all_writes(self):
-        for edit in (replace(self.repo, repo_id=""),
+        for edit in (replace(self.repo, last_tested="invalid"), replace(self.repo, repo_id=""),
                      replace(self.repo, source_urls={"Foundry": "https://example.com/"})):
             with self.subTest(edit=edit), self.assertRaises(TrackingValidationError):
                 save_repo(self.db, edit)
@@ -83,7 +80,7 @@ class TrackingWriteTests(unittest.TestCase):
         self.assertEqual(self.db.issues.update_one.call_args.kwargs, {})
 
     def test_issue_validation_and_duplicates_do_not_write(self):
-        for edit in (replace(self.issue, title=""),
+        for edit in (replace(self.issue, last_tested="invalid"), replace(self.issue, title=""),
                      replace(self.issue, handling_stage="Investigating"),
                      replace(self.issue, handling_stage="Waiting", progress_note="Waiting")):
             with self.subTest(edit=edit), self.assertRaises(TrackingValidationError):
@@ -104,18 +101,6 @@ class TrackingWriteTests(unittest.TestCase):
         update = self.db.issues.update_one.call_args.args[1]
         self.assertEqual(update["$push"]["handlingHistory"]["evidence"]["externalResponse"], "New evidence")
         self.assertEqual(existing["handlingHistory"], [initial["$push"]["handlingHistory"]])
-
-    def test_tested_now_stamps_only_when_selected_and_preserves_existing_issue_date(self):
-        old = datetime(2026, 9, 18, tzinfo=timezone.utc)
-        now = datetime(2026, 10, 2, tzinfo=timezone.utc)
-        self.db.issues.find_one.return_value = {"issueId": self.issue.issue_id, "lastTested": old}
-        edit = replace(self.issue, existing_id=self.issue.issue_id)
-        save_issue(self.db, edit)
-        self.assertNotIn("lastTested", self.db.issues.update_one.call_args.args[1]["$set"])
-        with patch("labs_tracker.services.tracking.datetime") as clock:
-            clock.now.return_value = now
-            save_issue(self.db, replace(edit, tested_now=True))
-        self.assertEqual(self.db.issues.update_one.call_args.args[1]["$set"]["lastTested"], now)
 
     def test_explicit_deletions_preserve_cascade_scope(self):
         delete_repo(self.db, "owner/repo")
@@ -228,60 +213,19 @@ class WebTrackingTests(unittest.TestCase):
     def test_repo_create_callback_validates_and_then_closes(self):
         self.fire(self.element(icon="add"))
         self.element(label="Repo id").set_value("owner/new")
+        self.element(label="Lab name").set_value("New lab")
+        self.element(label="Last tested").set_value("invalid")
         self.fire(self.element(label="Save"))
         self.assertIsNone(self.db.repos.find_one({"id": "owner/new"}))
         self.assertTrue(self.dialog().value)
-        self.notify.assert_called_with("id and name are required", color="negative")
-        self.element(label="Lab name").set_value("New lab")
-        tested = next(element for element in self.dialog().descendants() if isinstance(element, self.ui.checkbox))
-        self.assertEqual(tested.text, "Tested now")
-        self.assertFalse(tested.value)
-        tested.set_value(True)
-        before = datetime.now(timezone.utc)
+        self.notify.assert_called_with("Invalid lastTested format. Use ISO datetime.", color="negative")
+        self.element(label="Last tested").set_value("2026-09-18")
         self.fire(self.element(label="Save"))
         saved = self.db.repos.find_one({"id": "owner/new"})
         self.assertEqual(saved["name"], "New lab")
-        self.assertGreaterEqual(saved["lastTested"], before)
-        self.assertLessEqual(saved["lastTested"], datetime.now(timezone.utc))
+        self.assertEqual(saved["lastTested"], datetime(2026, 9, 18, tzinfo=timezone.utc))
         self.assertFalse(self.dialog().value)
         self.notify.assert_called_with("Saved", color="positive")
-
-    def test_repo_details_tested_now_preserves_then_refreshes_timestamp(self):
-        old = datetime(2026, 9, 18, tzinfo=timezone.utc)
-        self.db.repos.docs[0]["lastTested"] = old
-        repo_table = next(element for element in self.client.elements.values()
-                          if isinstance(element, self.ui.table) and element.row_key == "id")
-        for selected in (False, True):
-            self.fire(repo_table, "rowClick", [None, repo_table.rows[0]])
-            tested = next(element for element in self.dialog().descendants() if isinstance(element, self.ui.checkbox))
-            self.assertFalse(tested.value)
-            self.assertFalse(any(isinstance(element, self.ui.input) and element._props.get("label") == "Last tested"
-                                 for element in self.dialog().descendants()))
-            tested.set_value(selected)
-            self.fire(self.element(label="Save"))
-            timestamp = self.db.repos.docs[0]["lastTested"]
-            if selected:
-                self.assertGreater(timestamp, old)
-            else:
-                self.assertEqual(timestamp, old)
-
-    def test_issue_tested_now_preserves_then_refreshes_timestamp(self):
-        old = datetime(2026, 9, 18, tzinfo=timezone.utc)
-        self.db.issues.docs[0]["lastTested"] = old
-        self.fire(self.element(icon="analytics"))
-        table = next(element for element in self.client.elements.values()
-                     if isinstance(element, self.ui.table) and any(column["name"] == "observedHours" for column in element.columns))
-        for selected in (False, True):
-            self.fire(table, "rowClick", {"row": table.rows[0]})
-            tested = next(element for element in self.dialog().descendants() if isinstance(element, self.ui.checkbox))
-            self.assertFalse(tested.value)
-            tested.set_value(selected)
-            self.fire(self.element(label="Save"))
-            timestamp = self.db.issues.docs[0]["lastTested"]
-            if selected:
-                self.assertGreater(timestamp, old)
-            else:
-                self.assertEqual(timestamp, old)
 
     def test_duplicate_repo_warning_keeps_dialog_open(self):
         self.fire(self.element(icon="add"))

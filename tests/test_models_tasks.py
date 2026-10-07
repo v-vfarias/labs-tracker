@@ -8,7 +8,6 @@ from unittest.mock import patch
 from labs_tracker.models import HANDLING_STAGE_VALUES, ISSUE_TYPE_ALIASES, ISSUE_TYPE_VALUES, OWNER_VALUES, PRODUCT_VALUES, RESOLUTION_ALIASES, RESOLUTION_VALUES, STATUS_VALUES, default_issue_manual_fields, default_repo_manual_fields
 from labs_tracker.report import build_issue_report, generate_report
 from labs_tracker.sync import simplify_collections, sync
-from labs_tracker.tasks import generate_tasks
 from labs_tracker.workflow import handling_stage, progress_metrics, progress_update
 
 
@@ -228,94 +227,6 @@ class ModelTaskTests(unittest.TestCase):
     def test_default_repo_manual_fields_use_broad_foundry_bucket(self):
         fields = default_repo_manual_fields("MicrosoftLearning/mslearn-ai-language")
         self.assertEqual(fields["products"], ["Foundry"])
-
-    def test_generate_tasks_matches_simplified_rules(self):
-        now = datetime.now(timezone.utc)
-        db = FakeDb(
-            repos=[{"id": "owner/repo", "name": "repo", "lastUpdated": now, "lastTested": None}],
-            issues=[
-                {
-                    "issueId": "owner/repo#1",
-                    "repoId": "owner/repo",
-                    "kind": "Issue",
-                    "title": "Issue to classify",
-                    "state": "Open",
-                    "typeOfIssue": "Unknown",
-                    "resolution": "Unknown",
-                    "status": "Open",
-                    "lastTested": None,
-                },
-                {
-                    "issueId": "owner/repo#2",
-                    "repoId": "owner/repo",
-                    "kind": "PR",
-                    "title": "PR to validate",
-                    "state": "Open",
-                    "typeOfIssue": "UI drift",
-                    "resolution": "Unknown",
-                    "status": "In review",
-                    "lastTested": None,
-                },
-                {
-                    "issueId": "owner/repo#3",
-                    "repoId": "owner/repo",
-                    "kind": "Issue",
-                    "title": "Closed item",
-                    "state": "Closed",
-                    "typeOfIssue": "UI drift",
-                    "resolution": "Not applicable",
-                    "status": "Closed",
-                    "lastTested": None,
-                },
-            ],
-        )
-
-        reasons = [task["reason"] for task in generate_tasks(db)]
-
-        self.assertEqual(reasons, [
-            "Pending classification: classify the issue or PR",
-            "In review: assess the issue or proposed change",
-        ])
-
-    def test_task_eligibility_ignores_test_age_and_resolved_missing_classification(self):
-        base = {
-            "repoId": "owner/repo", "kind": "Issue", "title": "Issue", "state": "Open",
-            "typeOfIssue": "UI drift", "resolution": "Fixed in lab", "status": "Open",
-            "handlingStage": "Raised", "lastTested": None,
-        }
-        cases = [
-            ({}, False),
-            ({"typeOfIssue": None}, True),
-            ({"typeOfIssue": "invalid"}, True),
-            ({"resolution": None}, True),
-            ({"status": "In review"}, True),
-            ({"status": "Waiting owner review"}, True),
-            ({"handlingStage": "Validating"}, True),
-            ({"handlingStage": "Waiting", "waitingReason": "Information needed"}, True),
-            ({"handlingStage": "Waiting", "waitingReason": "External dependency"}, False),
-            ({"handlingStage": "Resolved", "typeOfIssue": "Unknown"}, False),
-            ({"status": "Resolved locally", "typeOfIssue": "Unknown", "handlingStage": "Validating"}, False),
-            ({"status": "Closed", "resolution": "Unknown"}, False),
-            ({"status": "Not applicable", "resolution": "Unknown"}, False),
-            ({"state": "Closed", "status": "In review"}, True),
-            ({"typeOfIssue": "SDK/code update", "resolution": "Updated instructions"}, False),
-        ]
-        for index, (fields, expected) in enumerate(cases):
-            with self.subTest(fields=fields):
-                item = {**base, "issueId": f"owner/repo#{index}", **fields}
-                for tested in (None, datetime.now(timezone.utc)):
-                    tasks = generate_tasks(FakeDb([], [{**item, "lastTested": tested}]))
-                    self.assertEqual(len(tasks), int(expected))
-
-    def test_pending_details_takes_precedence_over_review_and_classification(self):
-        issue = {
-            "issueId": "owner/repo#1", "repoId": "owner/repo", "kind": "Issue",
-            "status": "In review", "typeOfIssue": "Unknown", "resolution": "Unknown",
-            "handlingStage": "Waiting", "waitingReason": "Information needed",
-        }
-        tasks = generate_tasks(FakeDb([], [issue]))
-        self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["reason"], "Pending details: gather the requested information")
 
     def test_simplify_collections_normalizes_legacy_items(self):
         db = FakeDb(

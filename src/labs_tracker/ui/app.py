@@ -11,7 +11,6 @@ from .theme import apply_theme
 from .views.dashboard import DashboardView
 from .views.issues import IssuesView
 from .views.report import ReportView
-from .views.tasks import TasksView
 
 
 def build_ui(db) -> PageState:
@@ -30,14 +29,11 @@ def build_ui(db) -> PageState:
         issues = IssuesView(db, state, dashboard.refresh_summary)
 
         report = ReportView(db)
-        tasks = TasksView(db)
 
         def refresh_all():
             dashboard.refresh()
             issues.refresh()
             report.refresh()
-            if tasks.tasks_panel.visible:
-                tasks.refresh()
 
         actions = PageActions(
             db,
@@ -58,15 +54,6 @@ def build_ui(db) -> PageState:
             report.report_panel.visible = True
             report.report_panel.update()
             report.refresh()
-
-        def show_tasks_page():
-            state.active_view = "tasks"
-            state.issue_id = None
-            state.missing_classification = False
-            for panel in (dashboard.dashboard_view, issues.issues_panel, report.report_panel):
-                panel.set_visibility(False)
-            tasks.tasks_panel.set_visibility(True)
-            tasks.refresh()
 
         def back_from_report():
             state.active_view = "dashboard"
@@ -157,7 +144,6 @@ def build_ui(db) -> PageState:
             issues.issues_panel.update()
             report.report_panel.visible = False
             report.report_panel.update()
-            tasks.tasks_panel.set_visibility(False)
             dashboard.dashboard_view.visible = True
             dashboard.dashboard_view.update()
 
@@ -207,8 +193,6 @@ def build_ui(db) -> PageState:
         dashboard.source_validate_button.on_click(actions.run_source_validation)
         issues.issue_sync_button.on_click(actions.run_issue_sync)
         dashboard.report_button.on_click(show_report_page)
-        dashboard.tasks_button.on_click(show_tasks_page)
-        tasks.back_button.on_click(back_to_dashboard)
         report.report_back_button.on_click(back_from_report)
         report.report_refresh_button.on_click(report.refresh)
         report.report_pdf_button.on_click(report.export_pdf)
